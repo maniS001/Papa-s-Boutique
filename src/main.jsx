@@ -81,14 +81,53 @@ const whatsappOrderUrl = (product) => {
   return `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`;
 };
 
-function Header() {
+function Header({ categories = [], onSelectCategory }) {
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const handleCategoryClick = (cat) => {
+    setDropdownOpen(false);
+    if (location.pathname !== "/") {
+      navigate("/");
+      setTimeout(() => {
+        if (onSelectCategory) onSelectCategory(cat);
+        document.getElementById("collections")?.scrollIntoView({ behavior: "smooth" });
+      }, 100);
+    } else {
+      if (onSelectCategory) onSelectCategory(cat);
+      document.getElementById("collections")?.scrollIntoView({ behavior: "smooth" });
+    }
+  };
+
   return (
     <header>
       <Link className="brand logo" to="/" aria-label="PAPA'S BOUTIQUE home">
         <img src="/papa-boutique-logo.png" alt="PAPA'S BOUTIQUE" />
       </Link>
-      <nav>
-        <a href="#collections">Collections</a>
+      <nav className="nav-menu">
+        <div className="dropdown-container">
+          <button
+            type="button"
+            className="dropdown-trigger"
+            onClick={() => setDropdownOpen(!dropdownOpen)}
+            onBlur={() => setTimeout(() => setDropdownOpen(false), 200)}
+          >
+            Collections ▾
+          </button>
+          {dropdownOpen && (
+            <div className="dropdown-menu">
+              <button onClick={() => handleCategoryClick("All")}>
+                All Collections
+              </button>
+              {categories.map((cat) => (
+                <button key={cat} onClick={() => handleCategoryClick(cat)}>
+                  {cat}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </nav>
     </header>
   );
@@ -112,45 +151,22 @@ function Search({ value, onChange }) {
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        placeholder="Search dresses or collections"
+        placeholder="Search dresses, kurtis, dupattas..."
         aria-label="Search dresses or collections"
       />
     </label>
   );
 }
-function Home() {
-  const [products, setProducts] = useState(fallbackProducts);
-  const [filter, setFilter] = useState("All");
-  const [search, setSearch] = useState("");
-  useEffect(() => {
-    api("products")
-      .then(({ products }) => setProducts(products))
-      .catch(() => {});
-  }, []);
-  const collections = [
-    "All",
-    ...new Set(products.map((product) => product.collection)),
-  ];
-  const visible = products.filter((product) => {
-    const matchesCollection = filter === "All" || product.collection === filter;
-    const query = search.trim().toLowerCase();
-    const matchesSearch =
-      !query ||
-      [product.name, product.collection, ...(product.colours || [])]
-        .join(" ")
-        .toLowerCase()
-        .includes(query);
-    return matchesCollection && matchesSearch;
-  });
+function Home({ selectedCategory, setFilter, categories, products, visible, search, setSearch }) {
   return (
     <>
       <section className="hero">
         <div>
           <p className="eyebrow">The new summer edit</p>
           <h1>
-            Dresses made for
+            PAPA'S
             <br />
-            beautiful moments.
+            BOUTIQUE
           </h1>
           <p className="lede">
             Thoughtfully chosen silhouettes, small-batch details, and pieces you
@@ -169,11 +185,14 @@ function Home() {
           </div>
           <Search value={search} onChange={setSearch} />
         </div>
+        <div className="category-header">
+          <p className="category-subtitle">Filter by Category:</p>
+        </div>
         <div className="filters">
-          {collections.map((collection) => (
+          {["All", ...categories].map((collection) => (
             <button
               onClick={() => setFilter(collection)}
-              className={filter === collection ? "active" : ""}
+              className={selectedCategory === collection ? "active" : ""}
               key={collection}
             >
               {collection}
@@ -187,7 +206,7 @@ function Home() {
             ))}
           </div>
         ) : (
-          <p className="empty">No dresses match that search.</p>
+          <p className="empty">No items match that search or category.</p>
         )}
       </main>
     </>
@@ -289,6 +308,7 @@ function ImageUploader({ value, onChange }) {
       const response = await fetch("/api/admin/upload", { method: "POST", body: formData });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Upload failed.");
+      if (!data.url) throw new Error("Server did not return a valid image URL.");
       onChange(data.url);
     } catch (err) {
       setUploadError(err.message);
@@ -461,7 +481,7 @@ function Admin() {
       <div className="section-heading">
         <div>
           <p className="eyebrow">Inventory workspace</p>
-          <h1>{editing ? "Edit dress" : "Add a new dress"}</h1>
+          <h1>{editing ? "Edit item" : "Add a new item"}</h1>
         </div>
         <button
           className="text-button"
@@ -474,9 +494,45 @@ function Admin() {
         </button>
       </div>
       <form className="editor" onSubmit={save}>
+        <label>
+          Item name
+          <input
+            required
+            type="text"
+            value={draft.name}
+            onChange={(event) =>
+              setDraft({ ...draft, name: event.target.value })
+            }
+          />
+        </label>
+        <label className="collection-input-group">
+          Category / Collection
+          <input
+            required
+            type="text"
+            placeholder="e.g. Kurtis, Leggings, Dupatta..."
+            value={draft.collection}
+            onChange={(event) =>
+              setDraft({ ...draft, collection: event.target.value })
+            }
+          />
+          <div className="category-presets">
+            <span className="preset-label">Quick select:</span>
+            {["Kurtis", "Leggings", "Dupatta", "Sarees", "Summer Edit", "Occasion", "Everyday Ease"].map(
+              (cat) => (
+                <button
+                  key={cat}
+                  type="button"
+                  className={`preset-chip ${draft.collection === cat ? "active" : ""}`}
+                  onClick={() => setDraft({ ...draft, collection: cat })}
+                >
+                  {cat}
+                </button>
+              )
+            )}
+          </div>
+        </label>
         {[
-          ["name", "Dress name"],
-          ["collection", "Collection"],
           ["price", "Price (₹)"],
           ["sizes", "Sizes, separated by commas"],
           ["colours", "Colours, separated by commas"],
@@ -538,6 +594,23 @@ function Admin() {
         )}
         <p>{message}</p>
       </form>
+
+      {/* Category Management Overview */}
+      <div className="admin-category-panel">
+        <h2>Categories Overview</h2>
+        <div className="category-badges">
+          {Array.from(new Set(products.map((p) => p.collection))).map((cat) => {
+            const count = products.filter((p) => p.collection === cat).length;
+            return (
+              <div key={cat} className="category-badge">
+                <span className="cat-name">{cat}</span>
+                <span className="cat-count">{count} {count === 1 ? "item" : "items"}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <h2>Current catalogue</h2>
       <div className="inventory">
         {products.map((product) => (
@@ -565,11 +638,57 @@ function Admin() {
   );
 }
 function App() {
+  const [products, setProducts] = useState(fallbackProducts);
+  const [filter, setFilter] = useState("All");
+  const [search, setSearch] = useState("");
+
+  const refreshProducts = () => {
+    api("products")
+      .then(({ products }) => setProducts(products))
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    refreshProducts();
+  }, []);
+
+  const categories = Array.from(
+    new Set(products.map((product) => product.collection))
+  ).filter(Boolean);
+
+  const visible = products.filter((product) => {
+    const matchesCollection = filter === "All" || product.collection === filter;
+    const query = search.trim().toLowerCase();
+    const matchesSearch =
+      !query ||
+      [product.name, product.collection, ...(product.colours || [])]
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    return matchesCollection && matchesSearch;
+  });
+
   return (
     <>
-      <Header />
+      <Header
+        categories={categories}
+        onSelectCategory={(cat) => setFilter(cat)}
+      />
       <Routes>
-        <Route path="/" element={<Home />} />
+        <Route
+          path="/"
+          element={
+            <Home
+              selectedCategory={filter}
+              setFilter={setFilter}
+              categories={categories}
+              products={products}
+              visible={visible}
+              search={search}
+              setSearch={setSearch}
+            />
+          }
+        />
         <Route path="/product/:slug" element={<ProductDetail />} />
         <Route path="/admin" element={<Admin />} />
       </Routes>

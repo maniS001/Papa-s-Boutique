@@ -45,6 +45,20 @@ export default async (request) => {
     const product = catalogue.find((item) => item.slug === path.split('/')[1] && item.published)
     return product ? json({ product }) : json({ error: 'Dress not found.' }, 404)
   }
+  // ── Public image serving ─────────────────────────────────────────────────────
+  if (path.startsWith('images/') && method === 'GET') {
+    const key = path.slice('images/'.length)
+    if (!key) return json({ error: 'Not found.' }, 404)
+    const result = await imageStore().getWithMetadata(key, { type: 'arrayBuffer' })
+    if (!result || !result.data) return new Response('Image not found.', { status: 404 })
+    return new Response(result.data, {
+      status: 200,
+      headers: {
+        'Content-Type': result.metadata?.mimeType || 'application/octet-stream',
+        'Cache-Control': 'public, max-age=31536000, immutable',
+      },
+    })
+  }
   if (!path.startsWith('admin/')) return json({ error: 'Not found.' }, 404)
   const denied = requireAuth(request)
   if (denied) return denied
@@ -71,8 +85,8 @@ export default async (request) => {
     if (imageBuffer.byteLength > MAX_IMAGE_BYTES) return json({ error: 'Image is too large (max 8 MB).' }, 413)
     const key = `${crypto.randomUUID()}.${ext}`
     await imageStore().set(key, imageBuffer, { metadata: { mimeType } })
-    const { url } = await imageStore().getWithMetadata(key, { type: 'arrayBuffer' })
-    return json({ url })
+    // Return a URL pointing to our own public image-serving endpoint
+    return json({ url: `/api/images/${key}` })
   }
   // ── Products CRUD ────────────────────────────────────────────────────────────
   if (path === 'admin/products' && method === 'GET') return json({ products: catalogue })
