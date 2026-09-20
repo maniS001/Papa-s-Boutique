@@ -92,8 +92,10 @@ export default async (request) => {
   if (path === 'admin/products' && method === 'GET') return json({ products: catalogue })
   if (path === 'admin/products' && ['POST', 'PUT'].includes(method)) {
     const body = await requestBody(request)
-    if (!body?.name || !body?.collection || !Number.isFinite(body.price) || !body?.description || !body?.image) return json({ error: 'Please complete all required dress details.' }, 400)
-    const product = { ...body, id: body.id || crypto.randomUUID(), slug: body.slug || slugify(body.name), updatedAt: new Date().toISOString() }
+    const imagesList = body?.images?.length ? body.images : (body?.image ? [body.image] : [])
+    if (!body?.name || !body?.collection || !Number.isFinite(body.price) || !body?.description || !imagesList.length) return json({ error: 'Please complete all required dress details and add at least one image.' }, 400)
+    const primaryImage = imagesList[0]
+    const product = { ...body, image: primaryImage, images: imagesList, id: body.id || crypto.randomUUID(), slug: body.slug || slugify(body.name), updatedAt: new Date().toISOString() }
     const duplicate = catalogue.find((item) => item.slug === product.slug && item.id !== product.id)
     if (duplicate) return json({ error: 'Choose a different dress name; this URL already exists.' }, 409)
     const next = method === 'POST' ? [product, ...catalogue] : catalogue.map((item) => item.id === product.id ? product : item)

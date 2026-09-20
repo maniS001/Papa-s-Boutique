@@ -211,6 +211,46 @@ footer{text-align:center;padding:35px;border-top:1px solid #ded8cc;font:500 .8re
 .preview-clear{position:absolute;top:-8px;right:-8px;width:24px;height:24px;border-radius:50%;border:none;background:var(--ink);color:#fff;font-size:.8rem;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}
 .preview-clear:hover{background:var(--rose)}
 
+/* Multi Image Admin Grid */
+.url-add-group{display:flex;gap:8px}
+.url-add-group input{flex:1}
+.button-secondary{border:1px solid #c8bfb0;background:#fff;padding:10px 16px;font:600 .82rem 'Work Sans';text-transform:uppercase;letter-spacing:.06em;cursor:pointer;border-radius:4px;white-space:nowrap}
+.button-secondary:hover{background:var(--sand)}
+.multi-image-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:12px;margin-top:10px}
+.multi-image-card{position:relative;border:1px solid #dcd4c8;border-radius:6px;overflow:hidden;background:#fff;aspect-ratio:3/4;display:flex;flex-direction:column}
+.multi-image-card img{width:100%;height:100%;object-fit:cover}
+.card-badge{position:absolute;top:6px;left:6px;background:rgba(33,32,24,0.85);color:#fff;font:600 .68rem 'DM Mono';padding:2px 7px;border-radius:10px}
+.make-primary-btn{position:absolute;bottom:6px;left:50%;transform:translateX(-50%);background:rgba(255,255,255,0.92);border:1px solid #cfc7ba;color:var(--ink);font:600 .65rem 'Work Sans';padding:3px 8px;border-radius:4px;cursor:pointer;white-space:nowrap}
+.make-primary-btn:hover{background:var(--rose);color:#fff;border-color:var(--rose)}
+
+/* Product Detail Gallery & Zoom Hint */
+.product-gallery{display:flex;flex-direction:column;gap:14px}
+.main-image-wrapper{position:relative;cursor:zoom-in;overflow:hidden;border-radius:6px;border:1px solid #eae3d8}
+.product-main-img{width:100%;aspect-ratio:3/4;object-fit:cover;display:block;transition:transform .3s ease}
+.main-image-wrapper:hover .product-main-img{transform:scale(1.02)}
+.zoom-hint{position:absolute;bottom:12px;right:12px;background:rgba(33,32,24,0.82);color:#fff;font:500 .78rem 'Work Sans';padding:6px 12px;border-radius:20px;display:flex;align-items:center;gap:6px;backdrop-filter:blur(4px);pointer-events:none}
+.product-thumb-row{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px}
+.product-thumb-btn{border:2px solid transparent;background:none;padding:0;cursor:pointer;border-radius:4px;overflow:hidden;width:68px;height:85px;flex-shrink:0;transition:all .2s}
+.product-thumb-btn img{width:100%;height:100%;object-fit:cover;display:block}
+.product-thumb-btn.active{border-color:var(--rose);box-shadow:0 0 0 2px rgba(165,81,85,0.25)}
+
+/* Fullscreen Lightbox Modal */
+.lightbox-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(6px)}
+.lightbox-modal{position:relative;max-width:900px;max-height:92vh;width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.lightbox-close{position:fixed;top:20px;right:24px;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);color:#fff;font-size:1.4rem;width:44px;height:44px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:1010;transition:background .2s}
+.lightbox-close:hover{background:var(--rose);border-color:var(--rose)}
+.lightbox-counter{position:fixed;top:24px;left:24px;color:rgba(255,255,255,0.8);font:600 .9rem 'DM Mono';background:rgba(255,255,255,0.12);padding:6px 14px;border-radius:20px}
+.lightbox-img-wrapper{max-height:75vh;display:flex;align-items:center;justify-content:center}
+.lightbox-main-img{max-height:75vh;max-width:100%;object-fit:contain;border-radius:6px;box-shadow:0 12px 40px rgba(0,0,0,0.5)}
+.lightbox-arrow{position:fixed;top:50%;transform:translateY(-50%);background:rgba(255,255,255,0.18);border:1px solid rgba(255,255,255,0.3);color:#fff;font-size:2rem;width:52px;height:52px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:1010;transition:all .2s;line-height:1}
+.lightbox-arrow:hover{background:var(--rose);border-color:var(--rose)}
+.lightbox-arrow.prev{left:20px}
+.lightbox-arrow.next{right:20px}
+.lightbox-thumbs{display:flex;gap:10px;margin-top:18px;max-width:90%;overflow-x:auto;padding:6px}
+.lightbox-thumb{border:2px solid transparent;background:none;padding:0;cursor:pointer;border-radius:4px;overflow:hidden;width:54px;height:68px;opacity:0.6;transition:all .2s}
+.lightbox-thumb.active,.lightbox-thumb:hover{opacity:1;border-color:#fff}
+.lightbox-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+
 /* ── Mobile Responsive Overrides ── */
 @media(max-width:768px){
   body{font-size:15px}
@@ -232,7 +272,7 @@ footer{text-align:center;padding:35px;border-top:1px solid #ded8cc;font:500 .8re
   .card h3{font-size:1.15rem;margin-bottom:6px}
   .card p{font-size:.78rem}
   .card strong{font-size:.95rem}
-  .product>img{margin-bottom:32px;aspect-ratio:3/4}
+  .product>img,.product-gallery{margin-bottom:32px}
   .product h1{font-size:clamp(2.4rem,11vw,3.2rem)}
   .product h2{font-size:1.35rem}
   .description{font-size:1rem;line-height:1.65;margin:18px 0}
@@ -249,6 +289,9 @@ footer{text-align:center;padding:35px;border-top:1px solid #ded8cc;font:500 .8re
   .inventory .danger{grid-column:1/-1}
   .category-badge{padding:6px 12px;font-size:.82rem}
   footer{padding:28px 4vw;font-size:.78rem;line-height:1.6}
+  .lightbox-arrow.prev{left:10px}
+  .lightbox-arrow.next{right:10px}
+  .lightbox-arrow{width:42px;height:42px;font-size:1.6rem}
 }
 
 @media(max-width:480px){
@@ -257,5 +300,6 @@ footer{text-align:center;padding:35px;border-top:1px solid #ded8cc;font:500 .8re
   .logo img{width:50px;height:50px}
   .dropdown-menu{right:-10px}
 }
+
 
 

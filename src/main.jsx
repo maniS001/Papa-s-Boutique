@@ -103,19 +103,29 @@ const whatsappOrderUrl = (product) => {
 
 function Header({ categories = [], onSelectCategory }) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = React.useRef(null);
   const navigate = useNavigate();
   const location = useLocation();
 
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const handleCategoryClick = (cat) => {
     setDropdownOpen(false);
+    if (onSelectCategory) onSelectCategory(cat);
     if (location.pathname !== "/") {
       navigate("/");
       setTimeout(() => {
-        if (onSelectCategory) onSelectCategory(cat);
         document.getElementById("collections")?.scrollIntoView({ behavior: "smooth" });
       }, 100);
     } else {
-      if (onSelectCategory) onSelectCategory(cat);
       document.getElementById("collections")?.scrollIntoView({ behavior: "smooth" });
     }
   };
@@ -126,22 +136,30 @@ function Header({ categories = [], onSelectCategory }) {
         <img src="/papa-boutique-logo.png" alt="PAPA'S BOUTIQUE" />
       </Link>
       <nav className="nav-menu">
-        <div className="dropdown-container">
+        <div className="dropdown-container" ref={dropdownRef}>
           <button
             type="button"
             className="dropdown-trigger"
-            onClick={() => setDropdownOpen(!dropdownOpen)}
-            onBlur={() => setTimeout(() => setDropdownOpen(false), 200)}
+            onClick={() => setDropdownOpen((prev) => !prev)}
           >
             Collections ▾
           </button>
           {dropdownOpen && (
             <div className="dropdown-menu">
-              <button onClick={() => handleCategoryClick("All")}>
+              <button
+                type="button"
+                onMouseDown={() => handleCategoryClick("All")}
+                onClick={() => handleCategoryClick("All")}
+              >
                 All Collections
               </button>
               {categories.map((cat) => (
-                <button key={cat} onClick={() => handleCategoryClick(cat)}>
+                <button
+                  key={cat}
+                  type="button"
+                  onMouseDown={() => handleCategoryClick(cat)}
+                  onClick={() => handleCategoryClick(cat)}
+                >
                   {cat}
                 </button>
               ))}
@@ -278,24 +296,139 @@ function Home({ selectedCategory, setFilter, categories, products, visible, sear
     </>
   );
 }
+function ImageLightbox({ images, currentIndex, onClose, onSelectIndex }) {
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "ArrowLeft")
+        onSelectIndex((currentIndex - 1 + images.length) % images.length);
+      if (e.key === "ArrowRight")
+        onSelectIndex((currentIndex + 1) % images.length);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [currentIndex, images.length, onClose, onSelectIndex]);
+
+  if (!images || !images.length) return null;
+
+  return (
+    <div className="lightbox-overlay" onClick={onClose}>
+      <div className="lightbox-modal" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="lightbox-close" onClick={onClose} aria-label="Close lightbox">
+          ✕
+        </button>
+        <span className="lightbox-counter">
+          {currentIndex + 1} / {images.length}
+        </span>
+        <div className="lightbox-img-wrapper">
+          <img
+            src={images[currentIndex]}
+            alt={`Enlarged view ${currentIndex + 1}`}
+            className="lightbox-main-img"
+          />
+        </div>
+        {images.length > 1 && (
+          <>
+            <button
+              type="button"
+              className="lightbox-arrow prev"
+              onClick={() => onSelectIndex((currentIndex - 1 + images.length) % images.length)}
+              aria-label="Previous image"
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              className="lightbox-arrow next"
+              onClick={() => onSelectIndex((currentIndex + 1) % images.length)}
+              aria-label="Next image"
+            >
+              ›
+            </button>
+            <div className="lightbox-thumbs">
+              {images.map((img, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  className={`lightbox-thumb ${idx === currentIndex ? "active" : ""}`}
+                  onClick={() => onSelectIndex(idx)}
+                >
+                  <img src={img} alt={`Thumb ${idx + 1}`} />
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ProductDetail() {
   const { slug } = useParams();
   const [product, setProduct] = useState(null);
+  const [activeImageIndex, setActiveImageIndex] = useState(0);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+
   useEffect(() => {
     api(`products/${slug}`)
-      .then(({ product }) => setProduct(product))
+      .then(({ product }) => {
+        setProduct(product);
+        setActiveImageIndex(0);
+      })
       .catch(() =>
         setProduct(fallbackProducts.find((item) => item.slug === slug)),
       );
   }, [slug]);
+
   if (!product) return <main className="notice">Loading dress details…</main>;
+
+  const imagesList = product.images?.length
+    ? product.images
+    : product.image
+    ? [product.image]
+    : [];
+
+  const activeImage = imagesList[activeImageIndex] || imagesList[0] || product.image;
+
   const totalStock = Object.values(product.stock || {}).reduce(
     (total, qty) => total + Number(qty),
     0,
   );
+
   return (
     <main className="product">
-      <img src={product.image} alt={product.name} />
+      <div className="product-gallery">
+        <div
+          className="main-image-wrapper"
+          onClick={() => setLightboxOpen(true)}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => e.key === "Enter" && setLightboxOpen(true)}
+          aria-label="Click to view enlarged images"
+        >
+          <img src={activeImage} alt={product.name} className="product-main-img" />
+          <div className="zoom-hint">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35M11 8v6M8 11h6"/></svg>
+            Click to enlarge
+          </div>
+        </div>
+        {imagesList.length > 1 && (
+          <div className="product-thumb-row">
+            {imagesList.map((img, idx) => (
+              <button
+                key={idx}
+                type="button"
+                className={`product-thumb-btn ${idx === activeImageIndex ? "active" : ""}`}
+                onClick={() => setActiveImageIndex(idx)}
+              >
+                <img src={img} alt={`${product.name} preview ${idx + 1}`} />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
       <section>
         <Link className="back" to="/">
           ← Back to collection
@@ -336,9 +469,19 @@ function ProductDetail() {
           Order on WhatsApp
         </a>
       </section>
+
+      {lightboxOpen && (
+        <ImageLightbox
+          images={imagesList}
+          currentIndex={activeImageIndex}
+          onClose={() => setLightboxOpen(false)}
+          onSelectIndex={setActiveImageIndex}
+        />
+      )}
     </main>
   );
 }
+
 const blank = {
   name: "",
   collection: "",
@@ -348,45 +491,77 @@ const blank = {
   colours: "",
   stock: "S:0, M:0, L:0",
   image: "",
+  images: [],
   featured: false,
   published: true,
 };
-function ImageUploader({ value, onChange }) {
+
+function MultiImageUploader({ images = [], onChange }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  const [urlInput, setUrlInput] = useState("");
   const inputRef = React.useRef(null);
-  const handleFile = async (file) => {
-    if (!file) return;
+
+  const handleFiles = async (fileList) => {
+    if (!fileList || !fileList.length) return;
     setUploadError("");
     const allowed = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"];
-    if (!allowed.includes(file.type)) {
-      setUploadError("Unsupported file type. Please choose a JPEG, PNG, WebP, GIF, or AVIF.");
-      return;
+    const files = Array.from(fileList);
+
+    for (const file of files) {
+      if (!allowed.includes(file.type)) {
+        setUploadError(`Unsupported file type (${file.name}). Please use JPEG, PNG, WebP, GIF, or AVIF.`);
+        return;
+      }
+      if (file.size > 8 * 1024 * 1024) {
+        setUploadError(`File ${file.name} is too large. Maximum size is 8 MB.`);
+        return;
+      }
     }
-    if (file.size > 8 * 1024 * 1024) {
-      setUploadError("File is too large. Maximum size is 8 MB.");
-      return;
-    }
+
     setUploading(true);
+    const newUrls = [];
     try {
-      const formData = new FormData();
-      formData.append("image", file);
-      const response = await fetch("/api/admin/upload", { method: "POST", body: formData });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Upload failed.");
-      if (!data.url) throw new Error("Server did not return a valid image URL.");
-      onChange(data.url);
+      for (const file of files) {
+        const formData = new FormData();
+        formData.append("image", file);
+        const response = await fetch("/api/admin/upload", { method: "POST", body: formData });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Upload failed.");
+        if (data.url) newUrls.push(data.url);
+      }
+      onChange([...images, ...newUrls]);
     } catch (err) {
       setUploadError(err.message);
     } finally {
       setUploading(false);
     }
   };
+
+  const addUrl = () => {
+    const trimmed = urlInput.trim();
+    if (!trimmed) return;
+    onChange([...images, trimmed]);
+    setUrlInput("");
+  };
+
+  const removeImage = (indexToRemove) => {
+    onChange(images.filter((_, idx) => idx !== indexToRemove));
+  };
+
+  const setPrimary = (index) => {
+    if (index === 0) return;
+    const item = images[index];
+    const rest = images.filter((_, idx) => idx !== index);
+    onChange([item, ...rest]);
+  };
+
   const handleDrop = (event) => {
     event.preventDefault();
-    const file = event.dataTransfer?.files?.[0];
-    if (file) handleFile(file);
+    const files = event.dataTransfer?.files;
+    if (files && files.length) handleFiles(files);
   };
+
   return (
     <div className="image-uploader">
       <div
@@ -396,49 +571,78 @@ function ImageUploader({ value, onChange }) {
         onClick={() => !uploading && inputRef.current?.click()}
         role="button"
         tabIndex={0}
-        onKeyDown={(e) => e.key === "Enter" && inputRef.current?.click()}
-        aria-label="Upload image from device"
+        aria-label="Upload images from device"
       >
         <input
           ref={inputRef}
           type="file"
+          multiple
           accept="image/jpeg,image/png,image/webp,image/gif,image/avif"
           style={{ display: "none" }}
-          onChange={(e) => handleFile(e.target.files?.[0])}
+          onChange={(e) => handleFiles(e.target.files)}
         />
         {uploading ? (
           <span className="upload-spinner" aria-label="Uploading…">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" strokeDasharray="40 20" /></svg>
-            Uploading…
+            Uploading images…
           </span>
         ) : (
           <span className="upload-prompt">
-            <svg viewBox="0 0 24 24" aria-hidden="true" width="22" height="22"><path d="M12 16V8m0 0-3 3m3-3 3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/><rect x="3" y="3" width="18" height="18" rx="4" stroke="currentColor" strokeWidth="1.5" fill="none"/></svg>
-            Click to upload&nbsp;<span>or drag &amp; drop</span>
-            <em>JPEG, PNG, WebP, GIF, AVIF · max 8 MB</em>
+            <svg viewBox="0 0 24 24" aria-hidden="true" width="24" height="24"><path d="M12 16V8m0 0-3 3m3-3 3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/><rect x="3" y="3" width="18" height="18" rx="4" stroke="currentColor" strokeWidth="1.5" fill="none"/></svg>
+            Click to upload <span>multiple images</span> or drag &amp; drop
+            <em>Select multiple photos of Kurtis, Dupattas, details · max 8 MB each</em>
           </span>
         )}
       </div>
       {uploadError && <p className="upload-error">{uploadError}</p>}
       <div className="upload-url-row">
-        <span className="upload-divider">or paste an image URL</span>
-        <input
-          type="url"
-          placeholder="https://…"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          aria-label="Image URL"
-        />
+        <span className="upload-divider">or add an image URL</span>
+        <div className="url-add-group">
+          <input
+            type="text"
+            placeholder="https://… or /api/images/…"
+            value={urlInput}
+            onChange={(e) => setUrlInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addUrl())}
+            aria-label="Image URL"
+          />
+          <button type="button" className="button-secondary" onClick={addUrl}>
+            Add Image
+          </button>
+        </div>
       </div>
-      {value && (
-        <div className="image-preview">
-          <img src={value} alt="Preview" onError={(e) => (e.currentTarget.style.display = "none")} onLoad={(e) => (e.currentTarget.style.display = "")} />
-          <button type="button" className="preview-clear" onClick={() => onChange("")} aria-label="Remove image">✕</button>
+      {images.length > 0 && (
+        <div className="multi-image-grid">
+          {images.map((img, idx) => (
+            <div key={idx} className="multi-image-card">
+              <img src={img} alt={`Product photo ${idx + 1}`} />
+              <div className="card-badge">{idx === 0 ? "Primary" : `#${idx + 1}`}</div>
+              {idx !== 0 && (
+                <button
+                  type="button"
+                  className="make-primary-btn"
+                  onClick={() => setPrimary(idx)}
+                  title="Set as main image"
+                >
+                  Set Main
+                </button>
+              )}
+              <button
+                type="button"
+                className="preview-clear"
+                onClick={() => removeImage(idx)}
+                aria-label="Remove image"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
         </div>
       )}
     </div>
   );
 }
+
 function Admin() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [password, setPassword] = useState("");
@@ -482,6 +686,13 @@ function Admin() {
         .filter(([size, quantity]) => size && quantity !== undefined)
         .map(([size, quantity]) => [size.trim(), Number(quantity)]),
     );
+    const imagesList = draft.images?.length
+      ? draft.images
+      : draft.image
+      ? [draft.image]
+      : [];
+    const primaryImage = imagesList[0] || "";
+
     try {
       await api("admin/products", {
         method: editing ? "PUT" : "POST",
@@ -491,6 +702,8 @@ function Admin() {
           id: editing?.id,
           slug: editing?.slug,
           price: Number(draft.price),
+          image: primaryImage,
+          images: imagesList,
           sizes: toList(draft.sizes),
           colours: toList(draft.colours),
           stock,
@@ -505,9 +718,17 @@ function Admin() {
     }
   };
   const edit = (product) => {
+    const imagesList = product.images?.length
+      ? product.images
+      : product.image
+      ? [product.image]
+      : [];
+
     setEditing(product);
     setDraft({
       ...product,
+      images: imagesList,
+      image: imagesList[0] || "",
       sizes: product.sizes.join(", "),
       colours: product.colours.join(", "),
       stock: Object.entries(product.stock)
@@ -617,10 +838,10 @@ function Admin() {
           </label>
         ))}
         <label className="wide">
-          Dress image
-          <ImageUploader
-            value={draft.image}
-            onChange={(url) => setDraft({ ...draft, image: url })}
+          Product Images (Upload multiple photos)
+          <MultiImageUploader
+            images={draft.images?.length ? draft.images : (draft.image ? [draft.image] : [])}
+            onChange={(imgs) => setDraft({ ...draft, images: imgs, image: imgs[0] || "" })}
           />
         </label>
         <label className="wide">
@@ -723,7 +944,9 @@ function App() {
   ).filter(Boolean);
 
   const visible = products.filter((product) => {
-    const matchesCollection = filter === "All" || product.collection === filter;
+    const matchesCollection =
+      filter === "All" ||
+      product.collection?.trim().toLowerCase() === filter?.trim().toLowerCase();
     const query = search.trim().toLowerCase();
     const matchesSearch =
       !query ||
