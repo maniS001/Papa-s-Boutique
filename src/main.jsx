@@ -119,6 +119,9 @@ function Header({ categories = [], onSelectCategory }) {
 
   const handleCategoryClick = (cat) => {
     setDropdownOpen(false);
+    if (document.activeElement && typeof document.activeElement.blur === "function") {
+      document.activeElement.blur();
+    }
     if (onSelectCategory) onSelectCategory(cat);
     if (location.pathname !== "/") {
       navigate("/");
@@ -234,9 +237,16 @@ function HeroCarousel() {
         <p className="lede">
           Thoughtfully chosen Kurtis, Dupattas, Leggings &amp; silhouettes for beautiful moments.
         </p>
-        <a className="button" href="#collections">
+        <button
+          type="button"
+          className="button"
+          onClick={(e) => {
+            e.currentTarget.blur();
+            document.getElementById("collections")?.scrollIntoView({ behavior: "smooth" });
+          }}
+        >
           Explore the collection
-        </a>
+        </button>
       </div>
       <button className="carousel-arrow prev" onClick={prevSlide} aria-label="Previous Slide">
         ‹
