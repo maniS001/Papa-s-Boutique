@@ -6,17 +6,37 @@ import {
   Route,
   Routes,
   useNavigate,
+  useLocation,
   useParams,
 } from "react-router-dom";
 import "./styles.css";
 import { whatsappNumber } from "./config";
+
+const heroImages = [
+  {
+    url: "https://images.unsplash.com/photo-1610030469983-98e550d6193c?auto=format&fit=crop&w=1800&q=85",
+    title: "Kurtis & Ethnic Suits",
+  },
+  {
+    url: "https://images.unsplash.com/photo-1617627143750-d86bc21e42bb?auto=format&fit=crop&w=1800&q=85",
+    title: "Dupattas & Leggings",
+  },
+  {
+    url: "https://images.unsplash.com/photo-1583391733956-3750e0ff4e8b?auto=format&fit=crop&w=1800&q=85",
+    title: "Designer Boutique Collection",
+  },
+  {
+    url: "https://images.unsplash.com/photo-1609357605129-26f69add5d6e?auto=format&fit=crop&w=1800&q=85",
+    title: "Indian Traditional Fashion",
+  },
+];
 
 const fallbackProducts = [
   {
     id: "rose-midi",
     slug: "rose-garden-midi",
     name: "Rose Garden Midi",
-    collection: "Summer Edit",
+    collection: "Kurtis",
     price: 4890,
     description:
       "A softly structured midi dress in a rose garden print, finished with a square neckline and a flowing skirt.",
@@ -32,7 +52,7 @@ const fallbackProducts = [
     id: "saffron-silk",
     slug: "saffron-silk-slip",
     name: "Saffron Silk Slip",
-    collection: "Occasion",
+    collection: "Dupatta",
     price: 7290,
     description:
       "An elegant bias-cut satin slip dress with a low back and delicate adjustable straps.",
@@ -48,7 +68,7 @@ const fallbackProducts = [
     id: "linen-wrap",
     slug: "linen-wrap-dress",
     name: "Linen Wrap Dress",
-    collection: "Everyday Ease",
+    collection: "Leggings",
     price: 3990,
     description:
       "Breathable linen with a flattering adjustable wrap waist for effortless days out.",
@@ -157,26 +177,72 @@ function Search({ value, onChange }) {
     </label>
   );
 }
+function HeroCarousel() {
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentIndex((prevIndex) => (prevIndex + 1) % heroImages.length);
+    }, 4500);
+    return () => clearInterval(timer);
+  }, []);
+
+  const nextSlide = () => {
+    setCurrentIndex((prev) => (prev + 1) % heroImages.length);
+  };
+
+  const prevSlide = () => {
+    setCurrentIndex((prev) => (prev - 1 + heroImages.length) % heroImages.length);
+  };
+
+  return (
+    <section className="hero-carousel">
+      {heroImages.map((img, index) => (
+        <div
+          key={img.url}
+          className={`hero-slide ${index === currentIndex ? "active" : ""}`}
+          style={{
+            backgroundImage: `linear-gradient(90deg, rgba(35, 25, 15, 0.6), rgba(35, 25, 15, 0.2)), url('${img.url}')`,
+          }}
+        />
+      ))}
+      <div className="hero-content">
+        <p className="eyebrow">The new summer edit</p>
+        <h1>
+          PAPA'S
+          <br />
+          BOUTIQUE
+        </h1>
+        <p className="lede">
+          Thoughtfully chosen Kurtis, Dupattas, Leggings &amp; silhouettes for beautiful moments.
+        </p>
+        <a className="button" href="#collections">
+          Explore the collection
+        </a>
+      </div>
+      <button className="carousel-arrow prev" onClick={prevSlide} aria-label="Previous Slide">
+        ‹
+      </button>
+      <button className="carousel-arrow next" onClick={nextSlide} aria-label="Next Slide">
+        ›
+      </button>
+      <div className="carousel-dots">
+        {heroImages.map((_, index) => (
+          <button
+            key={index}
+            className={`dot ${index === currentIndex ? "active" : ""}`}
+            onClick={() => setCurrentIndex(index)}
+            aria-label={`Go to slide ${index + 1}`}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
 function Home({ selectedCategory, setFilter, categories, products, visible, search, setSearch }) {
   return (
     <>
-      <section className="hero">
-        <div>
-          <p className="eyebrow">The new summer edit</p>
-          <h1>
-            PAPA'S
-            <br />
-            BOUTIQUE
-          </h1>
-          <p className="lede">
-            Thoughtfully chosen silhouettes, small-batch details, and pieces you
-            will reach for again.
-          </p>
-          <a className="button" href="#collections">
-            Explore the collection
-          </a>
-        </div>
-      </section>
+      <HeroCarousel />
       <main id="collections">
         <div className="section-heading">
           <div>
