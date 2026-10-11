@@ -38,6 +38,24 @@ nav{display:flex;gap:28px;font-size:.9rem;text-transform:uppercase;letter-spacin
   color: #fff;
   max-width: 650px;
 }
+.hero-logo-link {
+  display: inline-block;
+  margin-bottom: 22px;
+  line-height: 0;
+  transition: transform 0.2s ease;
+}
+.hero-logo-link:hover {
+  transform: scale(1.05);
+}
+.hero-logo-img {
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  background: #fff;
+}
 .hero-content .eyebrow {
   color: #f6d2bd;
 }
@@ -341,7 +359,7 @@ footer{text-align:center;padding:35px;border-top:1px solid #ded8cc;font:500 .8re
 @media(max-width:480px){
   .grid{grid-template-columns:1fr;gap:20px}
   .hero h1{font-size:3.1rem}
-  .logo img{width:50px;height:50px}
+  .hero-logo-img{width:72px;height:72px}
   .dropdown-menu{right:-10px}
 }
 

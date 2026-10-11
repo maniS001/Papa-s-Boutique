@@ -101,78 +101,6 @@ const whatsappOrderUrl = (product) => {
   return `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`;
 };
 
-function Header({ categories = [], onSelectCategory }) {
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const dropdownRef = React.useRef(null);
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setDropdownOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  const handleCategoryClick = (cat) => {
-    setDropdownOpen(false);
-    if (document.activeElement && typeof document.activeElement.blur === "function") {
-      document.activeElement.blur();
-    }
-    if (onSelectCategory) onSelectCategory(cat);
-    if (location.pathname !== "/") {
-      navigate("/");
-      setTimeout(() => {
-        document.getElementById("collections")?.scrollIntoView({ behavior: "smooth" });
-      }, 100);
-    } else {
-      document.getElementById("collections")?.scrollIntoView({ behavior: "smooth" });
-    }
-  };
-
-  return (
-    <header>
-      <Link className="brand logo" to="/" aria-label="PAPA'S BOUTIQUE home">
-        <img src="/papa-boutique-logo.png" alt="PAPA'S BOUTIQUE" />
-      </Link>
-      <nav className="nav-menu">
-        <div className="dropdown-container" ref={dropdownRef}>
-          <button
-            type="button"
-            className="dropdown-trigger"
-            onClick={() => setDropdownOpen((prev) => !prev)}
-          >
-            Collections ▾
-          </button>
-          {dropdownOpen && (
-            <div className="dropdown-menu">
-              <button
-                type="button"
-                onMouseDown={() => handleCategoryClick("All")}
-                onClick={() => handleCategoryClick("All")}
-              >
-                All Collections
-              </button>
-              {categories.map((cat) => (
-                <button
-                  key={cat}
-                  type="button"
-                  onMouseDown={() => handleCategoryClick(cat)}
-                  onClick={() => handleCategoryClick(cat)}
-                >
-                  {cat}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </nav>
-    </header>
-  );
-}
 function ProductCard({ product }) {
   return (
     <Link className="card" to={`/product/${product.slug}`}>
@@ -228,6 +156,13 @@ function HeroCarousel() {
         />
       ))}
       <div className="hero-content">
+        <Link to="/" className="hero-logo-link" aria-label="PAPA'S BOUTIQUE home">
+          <img
+            src="/papa-boutique-logo.png"
+            alt="PAPA'S BOUTIQUE Logo"
+            className="hero-logo-img"
+          />
+        </Link>
         <p className="eyebrow">The new summer edit</p>
         <h1>
           PAPA'S
@@ -994,18 +929,36 @@ function Admin() {
   };
 
   const togglePublish = async (product) => {
+    const nextPublished = !product.published;
+    // Optimistically update UI immediately
+    setProducts((prev) =>
+      prev.map((p) => (p.id === product.id ? { ...p, published: nextPublished } : p))
+    );
     try {
-      await api(`admin/products/${product.id}/toggle-publish`, { method: "PATCH" });
-      load();
+      const response = await api(`admin/products/${product.id}/toggle-publish`, { method: "PATCH" });
+      if (response?.product) {
+        setProducts((prev) =>
+          prev.map((p) => (p.id === product.id ? response.product : p))
+        );
+      }
     } catch (error) {
+      // Revert if API fails
+      setProducts((prev) =>
+        prev.map((p) => (p.id === product.id ? { ...p, published: product.published } : p))
+      );
       alert("Failed to change visibility: " + error.message);
     }
   };
 
   const remove = async (id) => {
     if (!confirm("Permanently remove this item from the collection?")) return;
-    await api(`admin/products/${id}`, { method: "DELETE" });
-    load();
+    setProducts((prev) => prev.filter((p) => p.id !== id));
+    try {
+      await api(`admin/products/${id}`, { method: "DELETE" });
+    } catch (error) {
+      alert("Failed to remove item: " + error.message);
+      load();
+    }
   };
 
   if (!loggedIn)
@@ -1332,10 +1285,6 @@ function App() {
 
   return (
     <>
-      <Header
-        categories={categories}
-        onSelectCategory={(cat) => setFilter(cat)}
-      />
       <Routes>
         <Route
           path="/"
