@@ -495,6 +495,8 @@ function ProductDetail() {
 const blank = {
   name: "",
   collection: "",
+  buyPrice: "",
+  fixedPrice: "",
   price: "",
   description: "",
   sizes: "S, M, L",
@@ -505,6 +507,111 @@ const blank = {
   featured: false,
   published: true,
 };
+
+function exportInventoryToExcel(products) {
+  let totalAvailableStock = 0;
+  let totalSoldUnits = 0;
+  let totalBuyVal = 0;
+  let totalFixedVal = 0;
+  let totalSoldVal = 0;
+  let totalProfit = 0;
+
+  const rowsHtml = products.map((p, idx) => {
+    const availableStock = Object.values(p.stock || {}).reduce((sum, q) => sum + (Number(q) || 0), 0);
+    const buyPrice = Number(p.buyPrice) || 0;
+    const fixedPrice = Number(p.fixedPrice || p.price) || 0;
+    const soldCount = Number(p.soldCount) || 0;
+    const soldRevenue = Number(p.totalSoldRevenue) || 0;
+    const profit = soldRevenue - (buyPrice * soldCount);
+
+    totalAvailableStock += availableStock;
+    totalSoldUnits += soldCount;
+    totalBuyVal += buyPrice * (availableStock + soldCount);
+    totalFixedVal += fixedPrice * availableStock;
+    totalSoldVal += soldRevenue;
+    totalProfit += profit;
+
+    const imgUrl = (p.images && p.images[0]) || p.image || "";
+    const fullImgUrl = imgUrl.startsWith("http") ? imgUrl : `${window.location.origin}${imgUrl}`;
+
+    return `
+      <tr>
+        <td style="text-align:center;">${idx + 1}</td>
+        <td>${fullImgUrl ? `<a href="${fullImgUrl}" target="_blank">View Photo</a>` : "No Image"}</td>
+        <td><b>${p.name}</b></td>
+        <td>${p.collection || "Uncategorized"}</td>
+        <td style="text-align:center;">${p.published ? "Active (Visible)" : "Disabled (Hidden)"}</td>
+        <td style="text-align:right;">${availableStock}</td>
+        <td style="text-align:right;">₹${buyPrice.toLocaleString("en-IN")}</td>
+        <td style="text-align:right;">₹${fixedPrice.toLocaleString("en-IN")}</td>
+        <td style="text-align:right;">${soldCount}</td>
+        <td style="text-align:right;">₹${soldRevenue.toLocaleString("en-IN")}</td>
+        <td style="text-align:right; font-weight:bold; color:${profit >= 0 ? "#1b6f3a" : "#a23a3e"};">₹${profit.toLocaleString("en-IN")}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const summaryHtml = `
+    <tr style="background-color:#d4e6d4; font-weight:bold;">
+      <td colspan="5" style="text-align:right;">TOTALS:</td>
+      <td style="text-align:right;">${totalAvailableStock}</td>
+      <td style="text-align:right;">₹${totalBuyVal.toLocaleString("en-IN")}</td>
+      <td style="text-align:right;">₹${totalFixedVal.toLocaleString("en-IN")}</td>
+      <td style="text-align:right;">${totalSoldUnits}</td>
+      <td style="text-align:right;">₹${totalSoldVal.toLocaleString("en-IN")}</td>
+      <td style="text-align:right; color:#1b6f3a;">₹${totalProfit.toLocaleString("en-IN")}</td>
+    </tr>
+  `;
+
+  const tableHtml = `
+    <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+      <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+        <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Inventory</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
+        <style>
+          th { background-color: #212018; color: #ffffff; padding: 10px; font-family: sans-serif; font-size: 13px; text-align: left; }
+          td { padding: 8px; font-family: sans-serif; font-size: 12px; border: 1px solid #ddd; }
+          .title { font-size: 18px; font-weight: bold; font-family: sans-serif; }
+        </style>
+      </head>
+      <body>
+        <h2 class="title">PAPA'S BOUTIQUE - Complete Inventory & Sales Report</h2>
+        <p style="font-family:sans-serif; font-size:12px; color:#555;">Generated on: ${new Date().toLocaleString("en-IN")}</p>
+        <table border="1">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Product Image</th>
+              <th>Product Name</th>
+              <th>Category</th>
+              <th>Status</th>
+              <th>Available Stock</th>
+              <th>Buy Price (Unit)</th>
+              <th>Fixed Price (Retail)</th>
+              <th>Total Sold Count</th>
+              <th>Total Sold Revenue</th>
+              <th>Net Profit</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+            ${summaryHtml}
+          </tbody>
+        </table>
+      </body>
+    </html>
+  `;
+
+  const blob = new Blob([tableHtml], { type: "application/vnd.ms-excel;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `Papas_Boutique_Inventory_${new Date().toISOString().slice(0, 10)}.xls`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 function MultiImageUploader({ images = [], onChange }) {
   const [uploading, setUploading] = useState(false);
@@ -653,6 +760,131 @@ function MultiImageUploader({ images = [], onChange }) {
   );
 }
 
+function SoldModal({ product, onClose, onSoldSuccess }) {
+  const [quantity, setQuantity] = useState(1);
+  const [soldPrice, setSoldPrice] = useState(product.fixedPrice || product.price || "");
+  const [selectedSize, setSelectedSize] = useState(product.sizes?.[0] || "");
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const totalStock = Object.values(product.stock || {}).reduce((sum, q) => sum + (Number(q) || 0), 0);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setErrorMsg("");
+    const qty = Number(quantity);
+    const sp = Number(soldPrice);
+
+    if (qty <= 0) {
+      setErrorMsg("Please enter a valid quantity (1 or more).");
+      return;
+    }
+    if (qty > totalStock) {
+      setErrorMsg(`Cannot sell ${qty} units. Only ${totalStock} available in stock.`);
+      return;
+    }
+    if (sp < 0 || isNaN(sp)) {
+      setErrorMsg("Please enter a valid Sold Price.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await api(`admin/products/${product.id}/sell`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          quantity: qty,
+          soldPrice: sp,
+          size: selectedSize,
+        }),
+      });
+
+      if (response.autoDisabled) {
+        alert(`⚠️ Alert: Stock is now 0!\n"${product.name}" has been sold out and automatically disabled from the website storefront.`);
+      } else {
+        alert(`✅ Sale recorded successfully!\n${qty} piece(s) sold at ₹${sp}. Remaining stock: ${response.remainingStock}`);
+      }
+
+      onSoldSuccess();
+      onClose();
+    } catch (err) {
+      setErrorMsg(err.message || "Failed to record sale.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>Record Sale · {product.name}</h3>
+          <button type="button" className="modal-close" onClick={onClose}>✕</button>
+        </div>
+        <form onSubmit={handleSubmit} className="sold-form">
+          <p className="sold-meta">
+            Available Stock: <b>{totalStock} pcs</b> · Buy Price: <b>₹{product.buyPrice || 0}</b> · Fixed Price: <b>₹{product.fixedPrice || product.price || 0}</b>
+          </p>
+
+          {product.sizes && product.sizes.length > 0 && (
+            <label>
+              Select Size
+              <select value={selectedSize} onChange={(e) => setSelectedSize(e.target.value)}>
+                {product.sizes.map((s) => (
+                  <option key={s} value={s}>
+                    {s} ({product.stock?.[s] ?? 0} in stock)
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          <div className="form-row-2">
+            <label>
+              Number of Products (Quantity)
+              <input
+                type="number"
+                min="1"
+                max={totalStock}
+                required
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+              />
+            </label>
+            <label>
+              Sold Price (₹ per unit)
+              <input
+                type="number"
+                min="0"
+                required
+                value={soldPrice}
+                onChange={(e) => setSoldPrice(e.target.value)}
+              />
+            </label>
+          </div>
+
+          <div className="profit-preview">
+            <span>Estimated Profit for this sale:</span>
+            <b>₹{((Number(soldPrice) - (Number(product.buyPrice) || 0)) * Number(quantity)).toLocaleString("en-IN")}</b>
+          </div>
+
+          {errorMsg && <p className="error">{errorMsg}</p>}
+
+          <div className="modal-actions">
+            <button type="button" className="text-button" onClick={onClose} disabled={loading}>
+              Cancel
+            </button>
+            <button type="submit" className="button confirm-sold-btn" disabled={loading || totalStock <= 0}>
+              {loading ? "Recording..." : "Confirm & Update Inventory"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function Admin() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [password, setPassword] = useState("");
@@ -660,7 +892,9 @@ function Admin() {
   const [draft, setDraft] = useState(blank);
   const [editing, setEditing] = useState(null);
   const [message, setMessage] = useState("");
+  const [soldProduct, setSoldProduct] = useState(null);
   const navigate = useNavigate();
+
   const load = () =>
     api("admin/products")
       .then(({ products }) => {
@@ -668,7 +902,9 @@ function Admin() {
         setLoggedIn(true);
       })
       .catch(() => setLoggedIn(false));
+
   useEffect(load, []);
+
   const login = async (event) => {
     event.preventDefault();
     try {
@@ -682,6 +918,7 @@ function Admin() {
       setMessage(error.message);
     }
   };
+
   const save = async (event) => {
     event.preventDefault();
     const toList = (value) =>
@@ -703,6 +940,9 @@ function Admin() {
       : [];
     const primaryImage = imagesList[0] || "";
 
+    const fixedPrice = Number(draft.fixedPrice);
+    const buyPrice = Number(draft.buyPrice) || 0;
+
     try {
       await api("admin/products", {
         method: editing ? "PUT" : "POST",
@@ -711,7 +951,9 @@ function Admin() {
           ...draft,
           id: editing?.id,
           slug: editing?.slug,
-          price: Number(draft.price),
+          price: fixedPrice,
+          fixedPrice,
+          buyPrice,
           image: primaryImage,
           images: imagesList,
           sizes: toList(draft.sizes),
@@ -721,12 +963,13 @@ function Admin() {
       });
       setDraft(blank);
       setEditing(null);
-      setMessage("Collection saved.");
+      setMessage("Item saved successfully.");
       load();
     } catch (error) {
       setMessage(error.message);
     }
   };
+
   const edit = (product) => {
     const imagesList = product.images?.length
       ? product.images
@@ -737,21 +980,34 @@ function Admin() {
     setEditing(product);
     setDraft({
       ...product,
+      buyPrice: product.buyPrice !== undefined ? String(product.buyPrice) : "",
+      fixedPrice: String(product.fixedPrice || product.price || ""),
       images: imagesList,
       image: imagesList[0] || "",
-      sizes: product.sizes.join(", "),
-      colours: product.colours.join(", "),
-      stock: Object.entries(product.stock)
+      sizes: (product.sizes || []).join(", "),
+      colours: (product.colours || []).join(", "),
+      stock: Object.entries(product.stock || {})
         .map(([size, quantity]) => `${size}:${quantity}`)
         .join(", "),
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
+
+  const togglePublish = async (product) => {
+    try {
+      await api(`admin/products/${product.id}/toggle-publish`, { method: "PATCH" });
+      load();
+    } catch (error) {
+      alert("Failed to change visibility: " + error.message);
+    }
+  };
+
   const remove = async (id) => {
-    if (!confirm("Remove this item from the collection?")) return;
+    if (!confirm("Permanently remove this item from the collection?")) return;
     await api(`admin/products/${id}`, { method: "DELETE" });
     load();
   };
+
   if (!loggedIn)
     return (
       <main className="login">
@@ -773,6 +1029,7 @@ function Admin() {
         </form>
       </main>
     );
+
   return (
     <main className="admin">
       <div className="section-heading">
@@ -780,16 +1037,26 @@ function Admin() {
           <p className="eyebrow">Inventory workspace</p>
           <h1>{editing ? "Edit item" : "Add a new item"}</h1>
         </div>
-        <button
-          className="text-button"
-          onClick={async () => {
-            await api("auth/logout", { method: "POST" });
-            navigate("/");
-          }}
-        >
-          Sign out
-        </button>
+        <div className="admin-top-actions">
+          <button
+            type="button"
+            className="button excel-export-btn"
+            onClick={() => exportInventoryToExcel(products)}
+          >
+            📊 Download Excel Report
+          </button>
+          <button
+            className="text-button"
+            onClick={async () => {
+              await api("auth/logout", { method: "POST" });
+              navigate("/");
+            }}
+          >
+            Sign out
+          </button>
+        </div>
       </div>
+
       <form className="editor" onSubmit={save}>
         <label>
           Item name
@@ -829,24 +1096,67 @@ function Admin() {
             )}
           </div>
         </label>
-        {[
-          ["price", "Price (₹)"],
-          ["sizes", "Sizes, separated by commas"],
-          ["colours", "Colours, separated by commas"],
-          ["stock", "Stock, e.g. S:4, M:2"],
-        ].map(([key, label]) => (
-          <label key={key}>
-            {label}
-            <input
-              required={key !== "colours"}
-              type={key === "price" ? "number" : "text"}
-              value={draft[key]}
-              onChange={(event) =>
-                setDraft({ ...draft, [key]: event.target.value })
-              }
-            />
-          </label>
-        ))}
+
+        {/* Pricing Fields: BUY PRICE & FIXED PRICE */}
+        <label>
+          Buy Price (₹) <span className="helper-txt">(Cost price per unit)</span>
+          <input
+            required
+            type="number"
+            min="0"
+            placeholder="e.g. 2500"
+            value={draft.buyPrice}
+            onChange={(event) =>
+              setDraft({ ...draft, buyPrice: event.target.value })
+            }
+          />
+        </label>
+        <label>
+          Fixed Price (₹) <span className="helper-txt">(Selling / Retail price)</span>
+          <input
+            required
+            type="number"
+            min="0"
+            placeholder="e.g. 4890"
+            value={draft.fixedPrice}
+            onChange={(event) =>
+              setDraft({ ...draft, fixedPrice: event.target.value, price: event.target.value })
+            }
+          />
+        </label>
+
+        <label>
+          Sizes, separated by commas
+          <input
+            type="text"
+            value={draft.sizes}
+            onChange={(event) =>
+              setDraft({ ...draft, sizes: event.target.value })
+            }
+          />
+        </label>
+        <label>
+          Colours, separated by commas
+          <input
+            type="text"
+            value={draft.colours}
+            onChange={(event) =>
+              setDraft({ ...draft, colours: event.target.value })
+            }
+          />
+        </label>
+        <label className="wide">
+          Stock by Size (e.g. S:4, M:2, L:5)
+          <input
+            required
+            type="text"
+            value={draft.stock}
+            onChange={(event) =>
+              setDraft({ ...draft, stock: event.target.value })
+            }
+          />
+        </label>
+
         <label className="wide">
           Product Images (Upload multiple photos)
           <MultiImageUploader
@@ -864,7 +1174,7 @@ function Admin() {
             }
           />
         </label>
-        <label className="check">
+        <label className="check wide">
           <input
             type="checkbox"
             checked={draft.published}
@@ -872,10 +1182,10 @@ function Admin() {
               setDraft({ ...draft, published: event.target.checked })
             }
           />{" "}
-          Publish on storefront
+          Active (Visible on website storefront)
         </label>
         <button className="button">
-          {editing ? "Update dress" : "Add dress"}
+          {editing ? "Update item" : "Add item"}
         </button>
         {editing && (
           <button
@@ -908,32 +1218,85 @@ function Admin() {
         </div>
       </div>
 
-      <h2>Current catalogue</h2>
-      <div className="inventory">
-        {products.map((product) => (
-          <article key={product.id}>
-            <img src={product.image} alt="" />
-            <div>
-              <p>{product.collection}</p>
-              <h3>{product.name}</h3>
-              <span>
-                {Object.values(product.stock).reduce(
-                  (sum, qty) => sum + Number(qty),
-                  0,
-                )}{" "}
-                in stock · {product.published ? "Published" : "Hidden"}
-              </span>
-            </div>
-            <button onClick={() => edit(product)}>Edit</button>
-            <button className="danger" onClick={() => remove(product.id)}>
-              Remove
-            </button>
-          </article>
-        ))}
+      <div className="section-heading">
+        <h2>Current catalogue & Inventory</h2>
+        <button
+          type="button"
+          className="button excel-export-btn"
+          onClick={() => exportInventoryToExcel(products)}
+        >
+          📊 Export Excel (.xls)
+        </button>
       </div>
+
+      <div className="inventory">
+        {products.map((product) => {
+          const totalStock = Object.values(product.stock || {}).reduce(
+            (sum, qty) => sum + (Number(qty) || 0),
+            0,
+          );
+          const buyPrice = Number(product.buyPrice) || 0;
+          const fixedPrice = Number(product.fixedPrice || product.price) || 0;
+          const soldCount = Number(product.soldCount) || 0;
+          const soldRevenue = Number(product.totalSoldRevenue) || 0;
+          const profit = soldRevenue - (buyPrice * soldCount);
+
+          return (
+            <article key={product.id} className={!product.published ? "item-disabled" : ""}>
+              <img src={product.image} alt="" />
+              <div className="inventory-details">
+                <div className="inventory-header-row">
+                  <span className="tag-category">{product.collection}</span>
+                  <span className={`status-pill ${product.published ? "published" : "disabled"}`}>
+                    {product.published ? "● Active on Website" : "○ Disabled (Hidden)"}
+                  </span>
+                </div>
+                <h3>{product.name}</h3>
+                <div className="inventory-financial-row">
+                  <span>Stock: <b>{totalStock} pcs</b></span>
+                  <span>Buy: <b>₹{buyPrice.toLocaleString("en-IN")}</b></span>
+                  <span>Fixed: <b>₹{fixedPrice.toLocaleString("en-IN")}</b></span>
+                  <span>Sold: <b>{soldCount} pcs</b> (₹{soldRevenue.toLocaleString("en-IN")})</span>
+                  <span className="profit-tag">Profit: <b>₹{profit.toLocaleString("en-IN")}</b></span>
+                </div>
+              </div>
+              <div className="inventory-btn-group">
+                <button
+                  type="button"
+                  className="btn-sold"
+                  onClick={() => setSoldProduct(product)}
+                  title="Record a sale"
+                >
+                  💰 Record Sold
+                </button>
+                <button
+                  type="button"
+                  className={`btn-toggle-pub ${product.published ? "btn-disable" : "btn-enable"}`}
+                  onClick={() => togglePublish(product)}
+                >
+                  {product.published ? "Disable" : "Enable"}
+                </button>
+                <button type="button" onClick={() => edit(product)}>Edit</button>
+                <button type="button" className="danger" onClick={() => remove(product.id)}>
+                  Remove
+                </button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      {soldProduct && (
+        <SoldModal
+          product={soldProduct}
+          onClose={() => setSoldProduct(null)}
+          onSoldSuccess={load}
+        />
+      )}
     </main>
   );
 }
+
 function App() {
   const [products, setProducts] = useState(fallbackProducts);
   const [filter, setFilter] = useState("All");

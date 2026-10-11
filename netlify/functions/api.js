@@ -93,14 +93,106 @@ export default async (request) => {
   if (path === 'admin/products' && ['POST', 'PUT'].includes(method)) {
     const body = await requestBody(request)
     const imagesList = body?.images?.length ? body.images : (body?.image ? [body.image] : [])
-    if (!body?.name || !body?.collection || !Number.isFinite(body.price) || !body?.description || !imagesList.length) return json({ error: 'Please complete all required dress details and add at least one image.' }, 400)
+    const fixedPrice = Number.isFinite(Number(body?.fixedPrice)) ? Number(body.fixedPrice) : (Number.isFinite(Number(body?.price)) ? Number(body.price) : NaN)
+    const buyPrice = Number.isFinite(Number(body?.buyPrice)) ? Number(body.buyPrice) : 0
+    if (!body?.name || !body?.collection || !Number.isFinite(fixedPrice) || !body?.description || !imagesList.length) {
+      return json({ error: 'Please complete all required dress details, enter Fixed Price, and add at least one image.' }, 400)
+    }
     const primaryImage = imagesList[0]
-    const product = { ...body, image: primaryImage, images: imagesList, id: body.id || crypto.randomUUID(), slug: body.slug || slugify(body.name), updatedAt: new Date().toISOString() }
+    const product = {
+      ...body,
+      price: fixedPrice,
+      fixedPrice,
+      buyPrice,
+      image: primaryImage,
+      images: imagesList,
+      soldCount: Number.isFinite(Number(body?.soldCount)) ? Number(body.soldCount) : 0,
+      totalSoldRevenue: Number.isFinite(Number(body?.totalSoldRevenue)) ? Number(body.totalSoldRevenue) : 0,
+      sales: Array.isArray(body?.sales) ? body.sales : [],
+      id: body.id || crypto.randomUUID(),
+      slug: body.slug || slugify(body.name),
+      updatedAt: new Date().toISOString()
+    }
     const duplicate = catalogue.find((item) => item.slug === product.slug && item.id !== product.id)
     if (duplicate) return json({ error: 'Choose a different dress name; this URL already exists.' }, 409)
     const next = method === 'POST' ? [product, ...catalogue] : catalogue.map((item) => item.id === product.id ? product : item)
     await saveProducts(next)
     return json({ product })
+  }
+  // Toggle published status
+  if (path.startsWith('admin/products/') && path.endsWith('/toggle-publish') && method === 'PATCH') {
+    const id = path.split('/')[2]
+    const item = catalogue.find((p) => p.id === id)
+    if (!item) return json({ error: 'Product not found.' }, 404)
+    item.published = !item.published
+    item.updatedAt = new Date().toISOString()
+    await saveProducts(catalogue)
+    return json({ product: item })
+  }
+  // Record sale
+  if (path.startsWith('admin/products/') && path.endsWith('/sell') && method === 'POST') {
+    const id = path.split('/')[2]
+    const item = catalogue.find((p) => p.id === id)
+    if (!item) return json({ error: 'Product not found.' }, 404)
+    const body = await requestBody(request)
+    const quantity = Number(body?.quantity)
+    const soldPrice = Number(body?.soldPrice)
+    const size = body?.size || ''
+    if (!Number.isFinite(quantity) || quantity <= 0) return json({ error: 'Please provide a valid quantity.' }, 400)
+    if (!Number.isFinite(soldPrice) || soldPrice < 0) return json({ error: 'Please provide a valid sold price.' }, 400)
+
+    const currentTotalStock = Object.values(item.stock || {}).reduce((sum, q) => sum + (Number(q) || 0), 0)
+    if (quantity > currentTotalStock) {
+      return json({ error: `Cannot sell ${quantity} items. Only ${currentTotalStock} currently in stock.` }, 400)
+    }
+
+    // Deduct stock: if size provided, deduct from that size; otherwise deduct proportionally or from first available
+    const stockCopy = { ...(item.stock || {}) }
+    if (size && stockCopy[size] !== undefined) {
+      if (stockCopy[size] < quantity) {
+        return json({ error: `Only ${stockCopy[size]} available in size ${size}.` }, 400)
+      }
+      stockCopy[size] = Math.max(0, stockCopy[size] - quantity)
+    } else {
+      let remainingToDeduct = quantity
+      for (const s of Object.keys(stockCopy)) {
+        if (remainingToDeduct <= 0) break
+        const available = Number(stockCopy[s]) || 0
+        const take = Math.min(available, remainingToDeduct)
+        stockCopy[s] = available - take
+        remainingToDeduct -= take
+      }
+    }
+
+    const newTotalStock = Object.values(stockCopy).reduce((sum, q) => sum + (Number(q) || 0), 0)
+    const autoDisabled = newTotalStock <= 0
+    if (autoDisabled) {
+      item.published = false
+    }
+
+    item.stock = stockCopy
+    item.soldCount = (Number(item.soldCount) || 0) + quantity
+    item.totalSoldRevenue = (Number(item.totalSoldRevenue) || 0) + (soldPrice * quantity)
+    item.sales = [
+      ...(Array.isArray(item.sales) ? item.sales : []),
+      {
+        quantity,
+        soldPrice,
+        size: size || 'General',
+        timestamp: new Date().toISOString()
+      }
+    ]
+    item.updatedAt = new Date().toISOString()
+
+    await saveProducts(catalogue)
+    return json({
+      product: item,
+      autoDisabled,
+      remainingStock: newTotalStock,
+      message: autoDisabled
+        ? `Sale recorded. Total stock is now 0. This product has been automatically disabled from the storefront!`
+        : `Sale recorded. Remaining stock: ${newTotalStock}.`
+    })
   }
   if (path.startsWith('admin/products/') && method === 'DELETE') {
     const id = path.split('/')[2]
