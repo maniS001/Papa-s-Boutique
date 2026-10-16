@@ -463,5 +463,56 @@ footer{text-align:center;padding:35px;border-top:1px solid #ded8cc;font:500 .8re
   .admin-tab-btn{width:100%;text-align:center}
 }
 
+/* ── Mandatory Indicator & Field Headers ── */
+.mandatory-star{color:#c53030;font-weight:bold;margin-left:2px}
+.editor-full-field{display:flex;flex-direction:column;gap:8px}
+.field-group-header{display:flex;flex-direction:column;gap:2px}
+.field-group-title{font:600 .82rem 'Work Sans';text-transform:uppercase;letter-spacing:.05em;color:var(--ink)}
+.field-group-subtitle{font-size:.78rem;color:var(--muted);text-transform:none;letter-spacing:normal}
+.editor-actions-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px}
+.save-item-btn{margin:0}
+
+/* ── SizeStockSelector Component ── */
+.size-stock-card{background:#fdfcf9;border:1px solid #dfd7cc;border-radius:6px;padding:16px;display:flex;flex-direction:column;gap:14px}
+.size-pill-group{display:flex;flex-wrap:wrap;gap:8px}
+.size-pill-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border:1.5px solid #d4cab9;border-radius:20px;background:#fff;font:600 .85rem 'DM Mono',monospace;cursor:pointer;color:var(--ink);transition:all .15s ease}
+.size-pill-btn:hover{background:#f5eee4;border-color:var(--rose)}
+.size-pill-btn.selected{background:var(--ink);color:#fff;border-color:var(--ink)}
+.size-check-icon{font-size:.8rem;font-weight:bold;line-height:1}
+.custom-size-adder{display:flex;align-items:center;gap:8px;margin-top:2px}
+.custom-size-adder input{max-width:280px;padding:8px 12px;border:1px solid #cfc7ba;border-radius:4px;font-size:.85rem;background:#fff}
+.custom-size-adder button{padding:6px 12px;font-size:.82rem}
+
+.selected-sizes-stepper-list{background:#fff;border:1px solid #e2dad0;border-radius:6px;padding:14px 16px}
+.stepper-section-title{margin:0 0 10px;font-size:.82rem;font-weight:600;color:var(--ink)}
+.size-stepper-grid{display:flex;flex-wrap:wrap;gap:12px}
+.size-stepper-item{display:flex;align-items:center;gap:10px;background:#f7f4ee;padding:6px 12px;border-radius:6px;border:1px solid #ded5c7}
+.size-stepper-badge{font-family:'DM Mono',monospace;font-weight:700;font-size:.9rem;color:var(--ink);min-width:32px}
+.qty-counter{display:inline-flex;align-items:center;border:1px solid #cfc7ba;border-radius:4px;background:#fff;overflow:hidden}
+.qty-btn{background:#f7f3eb;border:none;padding:4px 10px;font-size:.95rem;font-weight:bold;cursor:pointer;color:var(--ink);transition:background .15s}
+.qty-btn:hover{background:var(--rose);color:#fff}
+.qty-num-input{width:44px;text-align:center;border:none;padding:5px 0;font:600 .9rem 'DM Mono',monospace;outline:none;-moz-appearance:textfield}
+.qty-num-input::-webkit-outer-spin-button,
+.qty-num-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.size-del-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:.85rem;padding:2px 6px;line-height:1}
+.size-del-btn:hover{color:#c53030}
+.total-stock-callout{margin-top:12px;padding-top:10px;border-top:1px dashed #ded5c7;font-size:.85rem;color:var(--muted)}
+.total-stock-callout b{color:var(--ink)}
+.size-required-warning{margin:0;background:#fff9ed;border:1px solid #fae2b8;color:#9c6500;padding:10px 14px;border-radius:4px;font-size:.85rem}
+
+/* ── Queue Banner for Bulk Autofill ── */
+.queue-banner{background:#fff8f0;border:1.5px solid #f0be8a;border-radius:8px;padding:16px 20px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;grid-column:1/-1}
+.queue-banner-left{display:flex;flex-direction:column;gap:6px;max-width:700px}
+.queue-badge{align-self:flex-start;background:#ea580c;color:#fff;font:700 .72rem 'DM Mono',monospace;padding:3px 8px;border-radius:10px;text-transform:uppercase;letter-spacing:.05em}
+.queue-title{margin:0;font:600 1.15rem 'Playfair Display',serif;color:var(--ink)}
+.queue-title em{font-style:italic;color:#9c4815}
+.queue-desc{margin:0;font-size:.85rem;color:#705542;line-height:1.4}
+.queue-banner-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.queue-btn{background:#fff;border:1px solid #cfc7ba;padding:8px 14px;border-radius:4px;font:600 .82rem 'Work Sans';cursor:pointer;transition:all .15s}
+.queue-btn:hover{background:#f5eee4;border-color:var(--rose)}
+.queue-btn.cancel{color:#a23a3e;border-color:#f5c4c4}
+.queue-btn.cancel:hover{background:#fdf2f2}
+
+
 
 

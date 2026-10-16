@@ -478,9 +478,9 @@ const blank = {
   fixedPrice: "",
   price: "",
   description: "",
-  sizes: "S, M, L",
+  sizes: [],
   colours: "",
-  stock: "S:0, M:0, L:0",
+  stock: {},
   image: "",
   images: [],
   featured: false,
@@ -739,6 +739,140 @@ function MultiImageUploader({ images = [], onChange }) {
   );
 }
 
+const STANDARD_SIZES = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "Free Size"];
+
+function SizeStockSelector({ selectedSizes = [], stock = {}, onChange }) {
+  const [customInput, setCustomInput] = useState("");
+
+  const handleToggle = (size) => {
+    const isSelected = selectedSizes.includes(size);
+    if (isSelected) {
+      const nextSizes = selectedSizes.filter((s) => s !== size);
+      const nextStock = { ...stock };
+      delete nextStock[size];
+      onChange(nextSizes, nextStock);
+    } else {
+      const nextSizes = [...selectedSizes, size];
+      const nextStock = { ...stock, [size]: 1 }; // Default count is 1
+      onChange(nextSizes, nextStock);
+    }
+  };
+
+  const handleQtyChange = (size, val) => {
+    const qty = Math.max(1, parseInt(val, 10) || 1);
+    onChange(selectedSizes, { ...stock, [size]: qty });
+  };
+
+  const handleAddCustom = (e) => {
+    e.preventDefault();
+    const trimmed = customInput.trim();
+    if (!trimmed) return;
+    if (!selectedSizes.includes(trimmed)) {
+      onChange([...selectedSizes, trimmed], { ...stock, [trimmed]: 1 });
+    }
+    setCustomInput("");
+  };
+
+  return (
+    <div className="size-stock-card">
+      <div className="size-pill-group">
+        {STANDARD_SIZES.map((size) => {
+          const isSelected = selectedSizes.includes(size);
+          return (
+            <button
+              key={size}
+              type="button"
+              className={`size-pill-btn ${isSelected ? "selected" : ""}`}
+              onClick={() => handleToggle(size)}
+            >
+              <span className="size-check-icon">{isSelected ? "✓" : "+"}</span>
+              <span className="size-label">{size}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="custom-size-adder">
+        <input
+          type="text"
+          placeholder="Custom size (e.g. 4XL, 32, Free Size...)"
+          value={customInput}
+          onChange={(e) => setCustomInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              handleAddCustom(e);
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="text-button"
+          onClick={handleAddCustom}
+        >
+          + Add Size
+        </button>
+      </div>
+
+      {selectedSizes.length > 0 ? (
+        <div className="selected-sizes-stepper-list">
+          <p className="stepper-section-title">
+            Quantity per size (Default is 1):
+          </p>
+          <div className="size-stepper-grid">
+            {selectedSizes.map((size) => {
+              const count = stock[size] !== undefined ? stock[size] : 1;
+              return (
+                <div key={size} className="size-stepper-item">
+                  <span className="size-stepper-badge">{size}</span>
+                  <div className="qty-counter">
+                    <button
+                      type="button"
+                      className="qty-btn"
+                      onClick={() => handleQtyChange(size, count - 1)}
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      min="1"
+                      className="qty-num-input"
+                      value={count}
+                      onChange={(e) => handleQtyChange(size, e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="qty-btn"
+                      onClick={() => handleQtyChange(size, count + 1)}
+                    >
+                      +
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    className="size-del-btn"
+                    onClick={() => handleToggle(size)}
+                    title={`Remove size ${size}`}
+                  >
+                    ✕
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <div className="total-stock-callout">
+            Total Selected Stock: <b>{Object.values(stock).reduce((s, q) => s + (Number(q) || 0), 0)} pieces</b>
+          </div>
+        </div>
+      ) : (
+        <p className="size-required-warning">
+          ⚠️ <b>Size is mandatory:</b> Please select at least one size above. Default count is 1.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function SoldModal({ product, onClose, onSoldSuccess }) {
   const [quantity, setQuantity] = useState(1);
   const [soldPrice, setSoldPrice] = useState(product.fixedPrice || product.price || "");
@@ -864,65 +998,102 @@ function SoldModal({ product, onClose, onSoldSuccess }) {
   );
 }
 
-const AI_PROMPT_TEMPLATE = `I am attaching photos of boutique clothing dresses for PAPA'S BOUTIQUE. Please examine each dress photo carefully and generate a valid JSON array of products for our inventory.
+const AI_PROMPT_TEMPLATE = `You are a fashion cataloguer for "PAPA'S BOUTIQUE".
+I am uploading photos of boutique dresses/clothing. Carefully analyze each photo and generate a clean, valid JSON array for our store inventory.
 
-Required JSON Structure:
+CRITICAL INSTRUCTIONS:
+1. DETECT MULTIPLE IMAGES FOR A SINGLE PRODUCT:
+   - If multiple photos show the SAME dress from different angles (front, back, neckline, embroidery close-up), group them together under ONE single product.
+   - Put all photo filenames for that dress in the "images" array.
+
+2. DETECT MULTI-COLOR VARIANTS:
+   - If the same design/pattern is photographed in multiple colors, group them as ONE product design.
+   - List all available colors in the "colours" array.
+   - In "colorVariants", map each color to its exact photo filename(s).
+
+3. DO NOT GENERATE PRICES, SIZES, OR STOCK COUNTS:
+   - Leave pricing (buyPrice, fixedPrice) and sizes/counts OUT of the JSON. The boutique admin will enter these in the admin panel.
+
+REQUIRED JSON FORMAT:
 [
   {
-    "name": "Attractive Dress Name (e.g. Navy Floral Embroidered Anarkali Kurti)",
-    "collection": "Category (Choose: Kurtis, Leggings, Dupatta, Sarees, Occasion, etc.)",
-    "buyPrice": 650,
-    "fixedPrice": 1299,
-    "description": "Attractive 2-3 sentence description detailing fabric, embroidery/work, fit, and styling tips.",
-    "sizes": ["S", "M", "L", "XL", "XXL"],
-    "colours": ["Navy Blue", "Gold"],
-    "stock": { "S": 3, "M": 5, "L": 5, "XL": 3 },
-    "images": ["photo_filename.jpg"]
+    "name": "Attractive Product Title (e.g. Zari Embroidered Chanderi Kurti)",
+    "collection": "Category (Choose from: Kurtis, Leggings, Dupatta, Sarees, Occasion, Everyday Ease)",
+    "description": "2-3 attractive sentences describing the fabric, style, embroidery/work, fit, and styling tips.",
+    "colours": ["Primary Color", "Secondary Color"],
+    "colorVariants": [
+      {
+        "colour": "Primary Color",
+        "images": ["photo1_front.jpg", "photo1_back.jpg"]
+      },
+      {
+        "colour": "Secondary Color",
+        "images": ["photo2_color2.jpg"]
+      }
+    ],
+    "images": [
+      "photo1_front.jpg",
+      "photo1_back.jpg",
+      "photo2_color2.jpg"
+    ]
   }
 ]
 
-Guidelines:
-1. In "images", use the exact filename of each uploaded photo (or e.g. "photo_1.jpg", "photo_2.jpg" if filenames are not visible). If multiple photos belong to the same outfit, put them in the same "images" array.
-2. Provide reasonable boutique buyPrice (cost) and fixedPrice (retail selling price) in INR.
-3. Output ONLY the raw JSON array inside a json code block without extra conversational filler.`;
+IMPORTANT:
+- Use the exact filename of each uploaded image.
+- Return ONLY the raw JSON array inside a \`\`\`json ... \`\`\` block without conversational preamble.`;
 
 const SAMPLE_JSON_DATA = [
   {
-    name: "Floral Anarkali Cotton Kurti",
+    name: "Floral Embroidered Chanderi Kurti",
     collection: "Kurtis",
-    buyPrice: 650,
-    fixedPrice: 1399,
-    description: "Pure breathable cotton Anarkali kurti featuring delicate floral block prints and a flattering round neck.",
-    sizes: ["S", "M", "L", "XL", "XXL"],
-    colours: ["Indigo Blue", "White"],
-    stock: { S: 3, M: 6, L: 6, XL: 4, XXL: 2 },
-    images: ["kurti_blue_01.jpg", "kurti_blue_02.jpg"],
+    description: "Pure Chanderi silk kurti with intricate floral thread embroidery along the yoke, styled with side slits and three-quarter sleeves.",
+    colours: ["Ruby Red", "Peacock Blue"],
+    colorVariants: [
+      {
+        colour: "Ruby Red",
+        images: ["kurti_red_front.jpg", "kurti_red_back.jpg"],
+      },
+      {
+        colour: "Peacock Blue",
+        images: ["kurti_blue_front.jpg"],
+      },
+    ],
+    images: ["kurti_red_front.jpg", "kurti_red_back.jpg", "kurti_blue_front.jpg"],
   },
   {
-    name: "Chanderi Banarasi Silk Dupatta",
+    name: "Banarasi Zari Border Silk Dupatta",
     collection: "Dupatta",
-    buyPrice: 380,
-    fixedPrice: 850,
-    description: "Regal Chanderi silk dupatta with ornate zari booti motifs and finished contrast tassels.",
-    sizes: ["Free Size"],
-    colours: ["Ruby Red", "Gold"],
-    stock: { "Free Size": 12 },
-    images: ["dupatta_red_01.jpg"],
+    description: "Traditional lightweight woven silk dupatta featuring ornate gold zari booti work and finished edge tassels.",
+    colours: ["Mustard Yellow"],
+    colorVariants: [
+      {
+        colour: "Mustard Yellow",
+        images: ["dupatta_yellow_01.jpg"],
+      },
+    ],
+    images: ["dupatta_yellow_01.jpg"],
   },
   {
-    name: "Ultra-Stretch Churidar Leggings",
+    name: "Four-Way Stretch Ankle Leggings",
     collection: "Leggings",
-    buyPrice: 220,
-    fixedPrice: 499,
-    description: "Combed four-way stretch cotton lycra leggings designed with an elasticated waistband and ankle gathers.",
-    sizes: ["L", "XL", "Free Size"],
-    colours: ["Jet Black"],
-    stock: { L: 8, XL: 8, "Free Size": 15 },
-    images: ["leggings_black_01.jpg"],
+    description: "Ultra-comfortable premium combed cotton lycra leggings with a broad anti-roll waistband.",
+    colours: ["Jet Black", "Oatmeal Beige"],
+    colorVariants: [
+      {
+        colour: "Jet Black",
+        images: ["leggings_black.jpg"],
+      },
+      {
+        colour: "Oatmeal Beige",
+        images: ["leggings_beige.jpg"],
+      },
+    ],
+    images: ["leggings_black.jpg", "leggings_beige.jpg"],
   },
 ];
 
-function BulkUploader({ onComplete }) {
+function BulkUploader({ onComplete, onStartAutofillQueue }) {
   const [imageFiles, setImageFiles] = useState(new Map());
   const [jsonText, setJsonText] = useState("");
   const [inputMode, setInputMode] = useState("paste"); // "paste" | "file"
@@ -1017,27 +1188,24 @@ function BulkUploader({ onComplete }) {
     });
   };
 
-  const handleBulkUpload = async () => {
+  const handleAutofillQueue = async () => {
     if (!parsedItems.length) return;
     setUploading(true);
-    setUploadSummary(null);
-    setUploadStatus("Matching images and preparing data...");
+    setUploadStatus("Matching and uploading photos...");
 
     const uploadedUrlsCache = new Map();
-    const processedProducts = [];
-    let uploadedCount = 0;
-
     const allImagesToUpload = [];
+
     for (const item of parsedItems) {
       const imgs = Array.isArray(item.images)
         ? item.images
         : (item.image ? [item.image] : []);
       for (const imgName of imgs) {
-        const cleanName = typeof imgName === "string" ? imgName.trim() : "";
-        if (cleanName && !cleanName.startsWith("http") && !cleanName.startsWith("/api/")) {
-          const lower = cleanName.toLowerCase();
+        const clean = typeof imgName === "string" ? imgName.trim() : "";
+        if (clean && !clean.startsWith("http") && !clean.startsWith("/api/")) {
+          const lower = clean.toLowerCase();
           if (!allImagesToUpload.some((x) => x.lower === lower)) {
-            allImagesToUpload.push({ original: cleanName, lower });
+            allImagesToUpload.push({ original: clean, lower });
           }
         }
       }
@@ -1046,7 +1214,6 @@ function BulkUploader({ onComplete }) {
     setUploadProgress({ current: 0, total: allImagesToUpload.length });
 
     try {
-      // 1. Upload images sequentially
       for (let i = 0; i < allImagesToUpload.length; i++) {
         const { original, lower } = allImagesToUpload[i];
         setUploadStatus(
@@ -1068,13 +1235,11 @@ function BulkUploader({ onComplete }) {
           }
           uploadedUrlsCache.set(lower, resData.url);
           uploadedUrlsCache.set(original, resData.url);
-          uploadedCount++;
         }
       }
 
-      // 2. Prepare product objects with replaced URLs
-      setUploadStatus("Saving dresses to boutique database...");
-      for (const item of parsedItems) {
+      setUploadStatus("Photos uploaded! Loading into Admin Form...");
+      const prepared = parsedItems.map((item) => {
         const rawImgs = Array.isArray(item.images)
           ? item.images
           : (item.image ? [item.image] : []);
@@ -1088,33 +1253,22 @@ function BulkUploader({ onComplete }) {
           })
           .filter(Boolean);
 
-        processedProducts.push({
+        return {
           ...item,
           images: finalImgs,
           image: finalImgs[0] || "",
-        });
+          buyPrice: "",
+          fixedPrice: "",
+          sizes: [],
+          stock: {},
+        };
+      });
+
+      if (onStartAutofillQueue) {
+        onStartAutofillQueue(prepared);
       }
-
-      // 3. Send to backend bulk endpoint
-      const bulkResponse = await api("admin/products/bulk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ products: processedProducts }),
-      });
-
-      setUploadSummary({
-        success: true,
-        count: bulkResponse.count || processedProducts.length,
-        imagesCount: uploadedCount,
-      });
-      setUploadStatus("Completed successfully!");
-      onComplete();
     } catch (err) {
-      setUploadSummary({
-        success: false,
-        error: err.message || "Failed during bulk upload.",
-      });
-      setUploadStatus("Upload encountered an issue.");
+      alert("Error preparing photos: " + err.message);
     } finally {
       setUploading(false);
     }
@@ -1124,9 +1278,9 @@ function BulkUploader({ onComplete }) {
     <div className="bulk-uploader-card">
       <div className="bulk-top-header">
         <div>
-          <h2>⚡ Bulk Product Import</h2>
+          <h2>⚡ Bulk Import &amp; Autofill</h2>
           <p className="bulk-desc">
-            Import multiple dresses in one shot using your dress photos and an AI-generated JSON file.
+            Load your photos &amp; AI-generated JSON. Photos will be uploaded and dress details will be autofilled into the Admin Form for quick price &amp; size entry.
           </p>
         </div>
         <div className="bulk-quick-actions">
@@ -1159,19 +1313,19 @@ function BulkUploader({ onComplete }) {
           <h3>📱 How to Generate Product JSON with ChatGPT / Gemini on Mobile:</h3>
           <ol>
             <li>
-              <b>Copy the Prompt:</b> Tap the <b>"Copy AI Prompt"</b> button above.
+              <b>Copy the Prompt:</b> Tap <b>"Copy AI Prompt"</b> above.
             </li>
             <li>
-              <b>Open AI App on Phone:</b> Open <b>ChatGPT</b> or <b>Google Gemini</b> app.
+              <b>Open AI App:</b> Open <b>ChatGPT</b> or <b>Google Gemini</b> app on your phone.
             </li>
             <li>
-              <b>Upload Your Dress Photos:</b> Select and attach all your boutique dress photos from your phone gallery.
+              <b>Upload Your Dress Photos:</b> Select all your dress photos (AI will automatically group multiple angles and color variants of the same dress!).
             </li>
             <li>
-              <b>Paste Prompt & Send:</b> Paste the copied prompt. You can also specify any prices, e.g. <i>"All Kurtis buy ₹500, sell ₹1199; Dupattas buy ₹250, sell ₹550"</i>.
+              <b>Paste Prompt:</b> Paste the copied prompt and send. (AI will describe each dress and detect colors/photos without guessing prices or sizes).
             </li>
             <li>
-              <b>Copy Output & Import:</b> Tap Copy on the AI response, switch back here, paste into <b>Step 2</b> below, select the photos, and click <b>Start Bulk Upload</b>!
+              <b>Copy JSON &amp; Autofill:</b> Copy the AI response, paste into <b>Step 2</b> below, choose the photos in <b>Step 1</b>, and tap <b>"Upload Photos &amp; Autofill Admin Form"</b>!
             </li>
           </ol>
         </div>
@@ -1320,7 +1474,7 @@ function BulkUploader({ onComplete }) {
             <span className="step-num">3</span>
             <div>
               <h3>Import Preview ({parsedItems.length} Dresses)</h3>
-              <p>Review the items and photo match status before importing.</p>
+              <p>Review dresses and photo matches before autofilling into the form.</p>
             </div>
           </div>
 
@@ -1331,8 +1485,7 @@ function BulkUploader({ onComplete }) {
                   <th>#</th>
                   <th>Dress Name</th>
                   <th>Category</th>
-                  <th>Buy / Fixed Price</th>
-                  <th>Sizes & Stock</th>
+                  <th>Colours / Variants</th>
                   <th>Photos Match Status</th>
                 </tr>
               </thead>
@@ -1359,11 +1512,7 @@ function BulkUploader({ onComplete }) {
                       <td><b>{item.name || "Untitled"}</b></td>
                       <td><span className="tag-category">{item.collection || "Kurtis"}</span></td>
                       <td>
-                        ₹{Number(item.buyPrice || 0).toLocaleString("en-IN")} /{" "}
-                        <b>₹{Number(item.fixedPrice || item.price || 0).toLocaleString("en-IN")}</b>
-                      </td>
-                      <td className="sizes-preview-cell">
-                        {Array.isArray(item.sizes) ? item.sizes.join(", ") : String(item.sizes || "Free Size")}
+                        {Array.isArray(item.colours) ? item.colours.join(", ") : (item.colours || "—")}
                       </td>
                       <td>
                         {imgs.length === 0 ? (
@@ -1389,17 +1538,17 @@ function BulkUploader({ onComplete }) {
             </table>
           </div>
 
-          {/* Upload Action */}
+          {/* Autofill Queue Action Button */}
           <div className="bulk-action-footer">
             <button
               type="button"
               className="button bulk-upload-start-btn"
               disabled={uploading || parsedItems.length === 0}
-              onClick={handleBulkUpload}
+              onClick={handleAutofillQueue}
             >
               {uploading
-                ? "⏳ Uploading..."
-                : `🚀 Start Bulk Upload (${parsedItems.length} dresses)`}
+                ? "⏳ Uploading Photos..."
+                : `⚡ Upload Photos & Autofill Admin Form (${parsedItems.length} ${parsedItems.length === 1 ? "dress" : "dresses"})`}
             </button>
           </div>
 
@@ -1414,24 +1563,6 @@ function BulkUploader({ onComplete }) {
                       width: `${Math.round((uploadProgress.current / uploadProgress.total) * 100)}%`,
                     }}
                   />
-                </div>
-              )}
-            </div>
-          )}
-
-          {uploadSummary && (
-            <div className={`bulk-summary-box ${uploadSummary.success ? "success" : "error"}`}>
-              {uploadSummary.success ? (
-                <div>
-                  <h4>🎉 Bulk Import Successful!</h4>
-                  <p>
-                    Added <b>{uploadSummary.count}</b> dresses with <b>{uploadSummary.imagesCount}</b> uploaded photos to Papa's Boutique.
-                  </p>
-                </div>
-              ) : (
-                <div>
-                  <h4>⚠️ Upload Error</h4>
-                  <p>{uploadSummary.error}</p>
                 </div>
               )}
             </div>
@@ -1454,6 +1585,8 @@ function Admin() {
   const [adminStatusFilter, setAdminStatusFilter] = useState("ALL");
   const [adminCategoryFilter, setAdminCategoryFilter] = useState("ALL");
   const [adminSearch, setAdminSearch] = useState("");
+  const [adminQueue, setAdminQueue] = useState(null); // array of items or null
+  const [queueIndex, setQueueIndex] = useState(0);
   const navigate = useNavigate();
 
   const load = () =>
@@ -1480,29 +1613,80 @@ function Admin() {
     }
   };
 
+  const loadQueueItem = (item, idx, total) => {
+    setActiveTab("single");
+    setEditing(null);
+    setDraft({
+      ...blank,
+      name: item.name || "",
+      collection: item.collection || "Kurtis",
+      description: item.description || "",
+      colours: Array.isArray(item.colours) ? item.colours.join(", ") : (item.colours || ""),
+      images: item.images || (item.image ? [item.image] : []),
+      image: (item.images && item.images[0]) || item.image || "",
+      buyPrice: "",
+      fixedPrice: "",
+      sizes: [],
+      stock: {},
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const startAutofillQueue = (items) => {
+    if (!items || !items.length) return;
+    setAdminQueue(items);
+    setQueueIndex(0);
+    loadQueueItem(items[0], 0, items.length);
+  };
+
   const save = async (event) => {
     event.preventDefault();
-    const toList = (value) =>
-      value
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
-    const stock = Object.fromEntries(
-      draft.stock
-        .split(",")
-        .map((part) => part.trim().split(":"))
-        .filter(([size, quantity]) => size && quantity !== undefined)
-        .map(([size, quantity]) => [size.trim(), Number(quantity)]),
-    );
+
+    const buyPriceNum = Number(draft.buyPrice);
+    const fixedPriceNum = Number(draft.fixedPrice);
+
+    if (draft.buyPrice === "" || draft.buyPrice === null || isNaN(buyPriceNum) || buyPriceNum < 0) {
+      alert("⚠️ Buy Price (Cost price) is mandatory. Please enter a valid amount.");
+      return;
+    }
+    if (draft.fixedPrice === "" || draft.fixedPrice === null || isNaN(fixedPriceNum) || fixedPriceNum <= 0) {
+      alert("⚠️ Fixed Price (Selling price) is mandatory. Please enter a valid retail price.");
+      return;
+    }
+
+    const sizesList = Array.isArray(draft.sizes)
+      ? draft.sizes
+      : typeof draft.sizes === "string"
+      ? draft.sizes.split(",").map((s) => s.trim()).filter(Boolean)
+      : [];
+
+    if (!sizesList.length) {
+      alert("⚠️ Size is mandatory. Please select at least one available size.");
+      return;
+    }
+
+    const stockObj = typeof draft.stock === "object" && draft.stock !== null ? draft.stock : {};
+    const totalQty = Object.values(stockObj).reduce((s, q) => s + (Number(q) || 0), 0);
+    if (totalQty <= 0) {
+      alert("⚠️ Please specify a quantity of at least 1 for the selected size(s).");
+      return;
+    }
+
     const imagesList = draft.images?.length
       ? draft.images
       : draft.image
       ? [draft.image]
       : [];
-    const primaryImage = imagesList[0] || "";
+    if (!imagesList.length) {
+      alert("⚠️ Please upload at least one photo for this product.");
+      return;
+    }
 
-    const fixedPrice = Number(draft.fixedPrice);
-    const buyPrice = Number(draft.buyPrice) || 0;
+    const coloursList = Array.isArray(draft.colours)
+      ? draft.colours
+      : typeof draft.colours === "string"
+      ? draft.colours.split(",").map((c) => c.trim()).filter(Boolean)
+      : [];
 
     try {
       await api("admin/products", {
@@ -1512,16 +1696,37 @@ function Admin() {
           ...draft,
           id: editing?.id,
           slug: editing?.slug,
-          price: fixedPrice,
-          fixedPrice,
-          buyPrice,
-          image: primaryImage,
+          price: fixedPriceNum,
+          fixedPrice: fixedPriceNum,
+          buyPrice: buyPriceNum,
+          image: imagesList[0] || "",
           images: imagesList,
-          sizes: toList(draft.sizes),
-          colours: toList(draft.colours),
-          stock,
+          sizes: sizesList,
+          colours: coloursList,
+          stock: stockObj,
         }),
       });
+
+      // If in queue mode from bulk JSON:
+      if (adminQueue && adminQueue.length > 0) {
+        const nextIndex = queueIndex + 1;
+        if (nextIndex < adminQueue.length) {
+          setQueueIndex(nextIndex);
+          loadQueueItem(adminQueue[nextIndex], nextIndex, adminQueue.length);
+          setMessage(`✅ Saved dress ${queueIndex + 1}! Now loaded dress ${nextIndex + 1} of ${adminQueue.length}. Please enter prices and select sizes.`);
+          load();
+          return;
+        } else {
+          setAdminQueue(null);
+          setQueueIndex(0);
+          setDraft(blank);
+          setEditing(null);
+          setMessage(`🎉 All ${adminQueue.length} dresses from JSON have been successfully added to your boutique!`);
+          load();
+          return;
+        }
+      }
+
       setDraft(blank);
       setEditing(null);
       setMessage("Item saved successfully.");
@@ -1533,24 +1738,32 @@ function Admin() {
 
   const edit = (product) => {
     setActiveTab("single");
+    setAdminQueue(null);
+    setQueueIndex(0);
     const imagesList = product.images?.length
       ? product.images
       : product.image
       ? [product.image]
       : [];
 
+    const sizesList = Array.isArray(product.sizes)
+      ? product.sizes
+      : typeof product.sizes === "string"
+      ? product.sizes.split(",").map((s) => s.trim()).filter(Boolean)
+      : Object.keys(product.stock || {});
+
+    const stockObj = typeof product.stock === "object" && product.stock !== null ? product.stock : {};
+
     setEditing(product);
     setDraft({
       ...product,
-      buyPrice: product.buyPrice !== undefined ? String(product.buyPrice) : "",
+      buyPrice: product.buyPrice !== undefined && product.buyPrice !== null ? String(product.buyPrice) : "",
       fixedPrice: String(product.fixedPrice || product.price || ""),
       images: imagesList,
       image: imagesList[0] || "",
-      sizes: (product.sizes || []).join(", "),
-      colours: (product.colours || []).join(", "),
-      stock: Object.entries(product.stock || {})
-        .map(([size, quantity]) => `${size}:${quantity}`)
-        .join(", "),
+      sizes: sizesList,
+      colours: Array.isArray(product.colours) ? product.colours.join(", ") : (product.colours || ""),
+      stock: stockObj,
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -1657,151 +1870,217 @@ function Admin() {
 
       {activeTab === "single" ? (
         <form className="editor" onSubmit={save}>
-          <label>
-            Item name
-          <input
-            required
-            type="text"
-            value={draft.name}
-            onChange={(event) =>
-              setDraft({ ...draft, name: event.target.value })
-            }
-          />
-        </label>
-        <label className="collection-input-group">
-          Category / Collection
-          <input
-            required
-            type="text"
-            placeholder="e.g. Kurtis, Leggings, Dupatta..."
-            value={draft.collection}
-            onChange={(event) =>
-              setDraft({ ...draft, collection: event.target.value })
-            }
-          />
-          <div className="category-presets">
-            <span className="preset-label">Quick select:</span>
-            {["Kurtis", "Leggings", "Dupatta", "Sarees", "Summer Edit", "Occasion", "Everyday Ease"].map(
-              (cat) => (
+          {adminQueue && (
+            <div className="queue-banner">
+              <div className="queue-banner-left">
+                <span className="queue-badge">⚡ Autofill Queue Mode</span>
+                <h3 className="queue-title">
+                  Reviewing Item {queueIndex + 1} of {adminQueue.length}: <em>{draft.name || "Untitled"}</em>
+                </h3>
+                <p className="queue-desc">
+                  Name, category, colours, description &amp; photos were autofilled from AI JSON. Please enter <strong>Buy Price</strong>, <strong>Fixed Price</strong>, and select <strong>Sizes &amp; Stock</strong> below.
+                </p>
+              </div>
+              <div className="queue-banner-actions">
+                {queueIndex > 0 && (
+                  <button
+                    type="button"
+                    className="queue-btn"
+                    onClick={() => {
+                      const prev = queueIndex - 1;
+                      setQueueIndex(prev);
+                      loadQueueItem(adminQueue[prev], prev, adminQueue.length);
+                    }}
+                  >
+                    ◀ Prev
+                  </button>
+                )}
+                {queueIndex < adminQueue.length - 1 && (
+                  <button
+                    type="button"
+                    className="queue-btn"
+                    onClick={() => {
+                      const next = queueIndex + 1;
+                      setQueueIndex(next);
+                      loadQueueItem(adminQueue[next], next, adminQueue.length);
+                    }}
+                  >
+                    Skip Next ▶
+                  </button>
+                )}
                 <button
-                  key={cat}
                   type="button"
-                  className={`preset-chip ${draft.collection === cat ? "active" : ""}`}
-                  onClick={() => setDraft({ ...draft, collection: cat })}
+                  className="queue-btn cancel"
+                  onClick={() => {
+                    if (confirm("Exit bulk upload queue? Unsaved progress for this item will be lost.")) {
+                      setAdminQueue(null);
+                      setDraft(blank);
+                    }
+                  }}
                 >
-                  {cat}
+                  ✕ Exit Queue
                 </button>
-              )
+              </div>
+            </div>
+          )}
+
+          <label>
+            Item name <span className="mandatory-star">*</span>
+            <input
+              required
+              type="text"
+              value={draft.name}
+              onChange={(event) =>
+                setDraft({ ...draft, name: event.target.value })
+              }
+            />
+          </label>
+          <label className="collection-input-group">
+            Category / Collection <span className="mandatory-star">*</span>
+            <input
+              required
+              type="text"
+              placeholder="e.g. Kurtis, Leggings, Dupatta..."
+              value={draft.collection}
+              onChange={(event) =>
+                setDraft({ ...draft, collection: event.target.value })
+              }
+            />
+            <div className="category-presets">
+              <span className="preset-label">Quick select:</span>
+              {["Kurtis", "Leggings", "Dupatta", "Sarees", "Summer Edit", "Occasion", "Everyday Ease"].map(
+                (cat) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    className={`preset-chip ${draft.collection === cat ? "active" : ""}`}
+                    onClick={() => setDraft({ ...draft, collection: cat })}
+                  >
+                    {cat}
+                  </button>
+                )
+              )}
+            </div>
+          </label>
+
+          {/* Pricing Fields: BUY PRICE & FIXED PRICE */}
+          <label>
+            Buy Price (₹) <span className="mandatory-star">*</span> <span className="helper-txt">(Cost price per unit - Mandatory)</span>
+            <input
+              required
+              type="number"
+              min="0"
+              placeholder="e.g. 2500"
+              value={draft.buyPrice}
+              onChange={(event) =>
+                setDraft({ ...draft, buyPrice: event.target.value })
+              }
+            />
+          </label>
+          <label>
+            Fixed Price (₹) <span className="mandatory-star">*</span> <span className="helper-txt">(Selling / Retail price - Mandatory)</span>
+            <input
+              required
+              type="number"
+              min="0"
+              placeholder="e.g. 4890"
+              value={draft.fixedPrice}
+              onChange={(event) =>
+                setDraft({ ...draft, fixedPrice: event.target.value, price: event.target.value })
+              }
+            />
+          </label>
+
+          <label className="wide">
+            Colours (e.g. Coral Pink, Dusty Rose)
+            <input
+              type="text"
+              placeholder="e.g. Coral Pink, Dusty Rose"
+              value={draft.colours}
+              onChange={(event) =>
+                setDraft({ ...draft, colours: event.target.value })
+              }
+            />
+          </label>
+
+          <div className="editor-full-field wide">
+            <div className="field-group-header">
+              <span className="field-group-title">Available Sizes &amp; Stock Count <span className="mandatory-star">*</span></span>
+              <span className="field-group-subtitle">Click any size to select (defaults to 1 piece). Adjust quantities with + / - buttons.</span>
+            </div>
+            <SizeStockSelector
+              selectedSizes={Array.isArray(draft.sizes) ? draft.sizes : []}
+              stock={typeof draft.stock === "object" && draft.stock !== null ? draft.stock : {}}
+              onChange={(sizes, stock) => setDraft({ ...draft, sizes, stock })}
+            />
+          </div>
+
+          <label className="wide">
+            Product Images (Upload multiple photos) <span className="mandatory-star">*</span>
+            <MultiImageUploader
+              images={draft.images?.length ? draft.images : (draft.image ? [draft.image] : [])}
+              onChange={(imgs) => setDraft({ ...draft, images: imgs, image: imgs[0] || "" })}
+            />
+          </label>
+          <label className="wide">
+            Description <span className="mandatory-star">*</span>
+            <textarea
+              required
+              value={draft.description}
+              onChange={(event) =>
+                setDraft({ ...draft, description: event.target.value })
+              }
+            />
+          </label>
+          <label className="check wide">
+            <input
+              type="checkbox"
+              checked={draft.published}
+              onChange={(event) =>
+                setDraft({ ...draft, published: event.target.checked })
+              }
+            />{" "}
+            Active (Visible on website storefront)
+          </label>
+          <div className="editor-actions-row wide">
+            <button className="button save-item-btn">
+              {adminQueue
+                ? `💾 Save & Next Item (${queueIndex + 1}/${adminQueue.length})`
+                : editing
+                ? "Update item"
+                : "Add item"}
+            </button>
+            {adminQueue && (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => {
+                  if (confirm("Exit bulk queue?")) {
+                    setAdminQueue(null);
+                    setDraft(blank);
+                  }
+                }}
+              >
+                Cancel queue
+              </button>
+            )}
+            {editing && (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => {
+                  setEditing(null);
+                  setDraft(blank);
+                }}
+              >
+                Cancel edit
+              </button>
             )}
           </div>
-        </label>
-
-        {/* Pricing Fields: BUY PRICE & FIXED PRICE */}
-        <label>
-          Buy Price (₹) <span className="helper-txt">(Cost price per unit)</span>
-          <input
-            required
-            type="number"
-            min="0"
-            placeholder="e.g. 2500"
-            value={draft.buyPrice}
-            onChange={(event) =>
-              setDraft({ ...draft, buyPrice: event.target.value })
-            }
-          />
-        </label>
-        <label>
-          Fixed Price (₹) <span className="helper-txt">(Selling / Retail price)</span>
-          <input
-            required
-            type="number"
-            min="0"
-            placeholder="e.g. 4890"
-            value={draft.fixedPrice}
-            onChange={(event) =>
-              setDraft({ ...draft, fixedPrice: event.target.value, price: event.target.value })
-            }
-          />
-        </label>
-
-        <label>
-          Sizes, separated by commas
-          <input
-            type="text"
-            value={draft.sizes}
-            onChange={(event) =>
-              setDraft({ ...draft, sizes: event.target.value })
-            }
-          />
-        </label>
-        <label>
-          Colours, separated by commas
-          <input
-            type="text"
-            value={draft.colours}
-            onChange={(event) =>
-              setDraft({ ...draft, colours: event.target.value })
-            }
-          />
-        </label>
-        <label className="wide">
-          Stock by Size (e.g. S:4, M:2, L:5)
-          <input
-            required
-            type="text"
-            value={draft.stock}
-            onChange={(event) =>
-              setDraft({ ...draft, stock: event.target.value })
-            }
-          />
-        </label>
-
-        <label className="wide">
-          Product Images (Upload multiple photos)
-          <MultiImageUploader
-            images={draft.images?.length ? draft.images : (draft.image ? [draft.image] : [])}
-            onChange={(imgs) => setDraft({ ...draft, images: imgs, image: imgs[0] || "" })}
-          />
-        </label>
-        <label className="wide">
-          Description
-          <textarea
-            required
-            value={draft.description}
-            onChange={(event) =>
-              setDraft({ ...draft, description: event.target.value })
-            }
-          />
-        </label>
-        <label className="check wide">
-          <input
-            type="checkbox"
-            checked={draft.published}
-            onChange={(event) =>
-              setDraft({ ...draft, published: event.target.checked })
-            }
-          />{" "}
-          Active (Visible on website storefront)
-        </label>
-        <button className="button">
-          {editing ? "Update item" : "Add item"}
-        </button>
-        {editing && (
-          <button
-            type="button"
-            className="text-button"
-            onClick={() => {
-              setEditing(null);
-              setDraft(blank);
-            }}
-          >
-            Cancel edit
-          </button>
-        )}
-        <p>{message}</p>
-      </form>
+          <p>{message}</p>
+        </form>
       ) : (
-        <BulkUploader onComplete={load} />
+        <BulkUploader onComplete={load} onStartAutofillQueue={startAutofillQueue} />
       )}
 
       {/* Category Management Overview */}
