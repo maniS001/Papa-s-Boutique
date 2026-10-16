@@ -119,6 +119,77 @@ export default async (request) => {
     await saveProducts(next)
     return json({ product })
   }
+  // ── Bulk Products Creation ──────────────────────────────────────────────────
+  if (path === 'admin/products/bulk' && method === 'POST') {
+    const body = await requestBody(request)
+    const itemsToAdd = Array.isArray(body?.products) ? body.products : []
+    if (!itemsToAdd.length) return json({ error: 'No products provided for bulk import.' }, 400)
+
+    const processed = []
+    for (const p of itemsToAdd) {
+      const imagesList = p?.images?.length ? p.images : (p?.image ? [p.image] : [])
+      const fixedPrice = Number.isFinite(Number(p?.fixedPrice)) ? Number(p.fixedPrice) : (Number.isFinite(Number(p?.price)) ? Number(p.price) : 0)
+      const buyPrice = Number.isFinite(Number(p?.buyPrice)) ? Number(p.buyPrice) : 0
+      const baseSlug = p.slug || slugify(p.name || 'product')
+      let slug = baseSlug
+      let counter = 1
+      while (catalogue.some(existing => existing.slug === slug) || processed.some(existing => existing.slug === slug)) {
+        slug = `${baseSlug}-${counter++}`
+      }
+
+      let parsedStock = {}
+      if (typeof p.stock === 'object' && p.stock !== null && !Array.isArray(p.stock)) {
+        parsedStock = p.stock
+      } else if (typeof p.stock === 'string') {
+        parsedStock = Object.fromEntries(
+          p.stock
+            .split(',')
+            .map((item) => item.trim().split(':'))
+            .filter(([k, v]) => k && v !== undefined)
+            .map(([k, v]) => [k.trim(), Number(v) || 0])
+        )
+      } else if (Number.isFinite(Number(p.stock))) {
+        parsedStock = { 'Free Size': Number(p.stock) }
+      }
+
+      const sizesList = Array.isArray(p.sizes)
+        ? p.sizes
+        : (typeof p.sizes === 'string'
+            ? p.sizes.split(',').map((s) => s.trim()).filter(Boolean)
+            : Object.keys(parsedStock).length ? Object.keys(parsedStock) : ['Free Size'])
+
+      const coloursList = Array.isArray(p.colours)
+        ? p.colours
+        : (typeof p.colours === 'string' ? p.colours.split(',').map((c) => c.trim()).filter(Boolean) : [])
+
+      const newProduct = {
+        id: p.id || crypto.randomUUID(),
+        name: p.name || 'Untitled Dress',
+        collection: p.collection || 'Kurtis',
+        price: fixedPrice,
+        fixedPrice,
+        buyPrice,
+        description: p.description || '',
+        sizes: sizesList.length ? sizesList : ['Free Size'],
+        colours: coloursList,
+        stock: parsedStock,
+        image: imagesList[0] || '',
+        images: imagesList,
+        featured: Boolean(p.featured),
+        published: p.published !== undefined ? Boolean(p.published) : true,
+        soldCount: Number(p.soldCount) || 0,
+        totalSoldRevenue: Number(p.totalSoldRevenue) || 0,
+        sales: Array.isArray(p.sales) ? p.sales : [],
+        slug,
+        updatedAt: new Date().toISOString()
+      }
+      processed.push(newProduct)
+    }
+
+    const next = [...processed, ...catalogue]
+    await saveProducts(next)
+    return json({ count: processed.length, products: processed })
+  }
   // Toggle published status
   if (path.startsWith('admin/products/') && path.endsWith('/toggle-publish') && method === 'PATCH') {
     const id = path.split('/')[2]

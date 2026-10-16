@@ -314,6 +314,7 @@ function ProductDetail() {
   const [product, setProduct] = useState(null);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
 
   useEffect(() => {
     api(`products/${slug}`)
@@ -325,6 +326,32 @@ function ProductDetail() {
         setProduct(fallbackProducts.find((item) => item.slug === slug)),
       );
   }, [slug]);
+
+  const handleShare = async () => {
+    if (!product) return;
+    const shareData = {
+      title: `${product.name} | PAPA'S BOUTIQUE`,
+      text: `Take a look at "${product.name}" (${product.collection}) for ${money(product.price)} at PAPA'S BOUTIQUE!`,
+      url: window.location.href,
+    };
+
+    if (navigator.share && navigator.canShare && navigator.canShare(shareData)) {
+      try {
+        await navigator.share(shareData);
+        return;
+      } catch (err) {
+        if (err.name === "AbortError") return;
+      }
+    }
+
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2500);
+    } catch {
+      alert("Product link: " + window.location.href);
+    }
+  };
 
   if (!product) return <main className="notice">Loading dress details…</main>;
 
@@ -399,20 +426,37 @@ function ProductDetail() {
             ? `${totalStock} pieces currently in stock`
             : "Currently sold out"}
         </p>
-        <a
-          className="button whatsapp"
-          href={whatsappOrderUrl(product)}
-          target="_blank"
-          rel="noreferrer"
-        >
-          <svg viewBox="0 0 32 32" aria-hidden="true">
-            <path
-              d="M16 3a13 13 0 0 0-11.1 19.7L3 29l6.5-1.7A13 13 0 1 0 16 3Zm0 23.6a10.5 10.5 0 0 1-5.3-1.4l-.4-.2-3.8 1 1-3.7-.3-.4A10.5 10.5 0 1 1 16 26.6Zm5.8-7.8c-.3-.2-1.9-.9-2.2-1-.3-.1-.5-.2-.7.2s-.8 1-1 1.2c-.2.2-.4.2-.7 0a8.6 8.6 0 0 1-2.5-1.5 9.3 9.3 0 0 1-1.7-2.1c-.2-.3 0-.5.1-.7l.5-.6c.2-.2.2-.4.3-.6 0-.2-.7-1.7-1-2.3-.3-.7-.6-.6-.8-.6h-.7c-.2 0-.6.1-.9.5s-1.2 1.1-1.2 2.8 1.2 3.3 1.4 3.5a12.3 12.3 0 0 0 4.7 4.2c.7.3 1.2.6 1.6.7.7.2 1.4.2 1.9.1.6-.1 1.9-.8 2.1-1.6.3-.8.3-1.5.2-1.6-.1-.2-.3-.3-.6-.5Z"
-              fill="currentColor"
-            />
-          </svg>
-          Order on WhatsApp
-        </a>
+        <div className="product-action-row">
+          <a
+            className="button whatsapp"
+            href={whatsappOrderUrl(product)}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <svg viewBox="0 0 32 32" aria-hidden="true">
+              <path
+                d="M16 3a13 13 0 0 0-11.1 19.7L3 29l6.5-1.7A13 13 0 1 0 16 3Zm0 23.6a10.5 10.5 0 0 1-5.3-1.4l-.4-.2-3.8 1 1-3.7-.3-.4A10.5 10.5 0 1 1 16 26.6Zm5.8-7.8c-.3-.2-1.9-.9-2.2-1-.3-.1-.5-.2-.7.2s-.8 1-1 1.2c-.2.2-.4.2-.7 0a8.6 8.6 0 0 1-2.5-1.5 9.3 9.3 0 0 1-1.7-2.1c-.2-.3 0-.5.1-.7l.5-.6c.2-.2.2-.4.3-.6 0-.2-.7-1.7-1-2.3-.3-.7-.6-.6-.8-.6h-.7c-.2 0-.6.1-.9.5s-1.2 1.1-1.2 2.8 1.2 3.3 1.4 3.5a12.3 12.3 0 0 0 4.7 4.2c.7.3 1.2.6 1.6.7.7.2 1.4.2 1.9.1.6-.1 1.9-.8 2.1-1.6.3-.8.3-1.5.2-1.6-.1-.2-.3-.3-.6-.5Z"
+                fill="currentColor"
+              />
+            </svg>
+            Order on WhatsApp
+          </a>
+          <button
+            type="button"
+            className={`button share-btn ${shareCopied ? "copied" : ""}`}
+            onClick={handleShare}
+            title="Share this dress with friends or family"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="18" cy="5" r="3"></circle>
+              <circle cx="6" cy="12" r="3"></circle>
+              <circle cx="18" cy="19" r="3"></circle>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+            </svg>
+            {shareCopied ? "✓ Link Copied!" : "Share Dress"}
+          </button>
+        </div>
       </section>
 
       {lightboxOpen && (
@@ -820,6 +864,584 @@ function SoldModal({ product, onClose, onSoldSuccess }) {
   );
 }
 
+const AI_PROMPT_TEMPLATE = `I am attaching photos of boutique clothing dresses for PAPA'S BOUTIQUE. Please examine each dress photo carefully and generate a valid JSON array of products for our inventory.
+
+Required JSON Structure:
+[
+  {
+    "name": "Attractive Dress Name (e.g. Navy Floral Embroidered Anarkali Kurti)",
+    "collection": "Category (Choose: Kurtis, Leggings, Dupatta, Sarees, Occasion, etc.)",
+    "buyPrice": 650,
+    "fixedPrice": 1299,
+    "description": "Attractive 2-3 sentence description detailing fabric, embroidery/work, fit, and styling tips.",
+    "sizes": ["S", "M", "L", "XL", "XXL"],
+    "colours": ["Navy Blue", "Gold"],
+    "stock": { "S": 3, "M": 5, "L": 5, "XL": 3 },
+    "images": ["photo_filename.jpg"]
+  }
+]
+
+Guidelines:
+1. In "images", use the exact filename of each uploaded photo (or e.g. "photo_1.jpg", "photo_2.jpg" if filenames are not visible). If multiple photos belong to the same outfit, put them in the same "images" array.
+2. Provide reasonable boutique buyPrice (cost) and fixedPrice (retail selling price) in INR.
+3. Output ONLY the raw JSON array inside a json code block without extra conversational filler.`;
+
+const SAMPLE_JSON_DATA = [
+  {
+    name: "Floral Anarkali Cotton Kurti",
+    collection: "Kurtis",
+    buyPrice: 650,
+    fixedPrice: 1399,
+    description: "Pure breathable cotton Anarkali kurti featuring delicate floral block prints and a flattering round neck.",
+    sizes: ["S", "M", "L", "XL", "XXL"],
+    colours: ["Indigo Blue", "White"],
+    stock: { S: 3, M: 6, L: 6, XL: 4, XXL: 2 },
+    images: ["kurti_blue_01.jpg", "kurti_blue_02.jpg"],
+  },
+  {
+    name: "Chanderi Banarasi Silk Dupatta",
+    collection: "Dupatta",
+    buyPrice: 380,
+    fixedPrice: 850,
+    description: "Regal Chanderi silk dupatta with ornate zari booti motifs and finished contrast tassels.",
+    sizes: ["Free Size"],
+    colours: ["Ruby Red", "Gold"],
+    stock: { "Free Size": 12 },
+    images: ["dupatta_red_01.jpg"],
+  },
+  {
+    name: "Ultra-Stretch Churidar Leggings",
+    collection: "Leggings",
+    buyPrice: 220,
+    fixedPrice: 499,
+    description: "Combed four-way stretch cotton lycra leggings designed with an elasticated waistband and ankle gathers.",
+    sizes: ["L", "XL", "Free Size"],
+    colours: ["Jet Black"],
+    stock: { L: 8, XL: 8, "Free Size": 15 },
+    images: ["leggings_black_01.jpg"],
+  },
+];
+
+function BulkUploader({ onComplete }) {
+  const [imageFiles, setImageFiles] = useState(new Map());
+  const [jsonText, setJsonText] = useState("");
+  const [inputMode, setInputMode] = useState("paste"); // "paste" | "file"
+  const [parsedItems, setParsedItems] = useState([]);
+  const [parseError, setParseError] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState("");
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
+  const [uploadSummary, setUploadSummary] = useState(null);
+  const [showAiGuide, setShowAiGuide] = useState(false);
+  const [copiedPrompt, setCopiedPrompt] = useState(false);
+
+  const folderInputRef = React.useRef(null);
+  const fileInputRef = React.useRef(null);
+  const jsonFileInputRef = React.useRef(null);
+
+  const handleImageFiles = (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const newMap = new Map(imageFiles);
+    for (const f of files) {
+      newMap.set(f.name.toLowerCase().trim(), f);
+      newMap.set(f.name.trim(), f);
+    }
+    setImageFiles(newMap);
+  };
+
+  const tryParseJson = (raw) => {
+    if (!raw.trim()) {
+      setParsedItems([]);
+      setParseError("");
+      return;
+    }
+    try {
+      const clean = raw
+        .trim()
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/, "");
+      const data = JSON.parse(clean);
+      const list = Array.isArray(data)
+        ? data
+        : (Array.isArray(data?.products) ? data.products : null);
+      if (!list) {
+        throw new Error(
+          "JSON must be an array of products, e.g. [ { ... }, { ... } ] or { products: [ ... ] }"
+        );
+      }
+      setParsedItems(list);
+      setParseError("");
+    } catch (err) {
+      setParsedItems([]);
+      setParseError(err.message || "Invalid JSON syntax.");
+    }
+  };
+
+  const handleJsonTextChange = (e) => {
+    const val = e.target.value;
+    setJsonText(val);
+    tryParseJson(val);
+  };
+
+  const handleJsonFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result || "";
+      setJsonText(content);
+      tryParseJson(content);
+    };
+    reader.readAsText(file);
+  };
+
+  const downloadSampleJson = () => {
+    const blob = new Blob([JSON.stringify(SAMPLE_JSON_DATA, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "papas_boutique_sample_products.json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const copyAiPrompt = () => {
+    navigator.clipboard.writeText(AI_PROMPT_TEMPLATE).then(() => {
+      setCopiedPrompt(true);
+      setTimeout(() => setCopiedPrompt(false), 2500);
+    });
+  };
+
+  const handleBulkUpload = async () => {
+    if (!parsedItems.length) return;
+    setUploading(true);
+    setUploadSummary(null);
+    setUploadStatus("Matching images and preparing data...");
+
+    const uploadedUrlsCache = new Map();
+    const processedProducts = [];
+    let uploadedCount = 0;
+
+    const allImagesToUpload = [];
+    for (const item of parsedItems) {
+      const imgs = Array.isArray(item.images)
+        ? item.images
+        : (item.image ? [item.image] : []);
+      for (const imgName of imgs) {
+        const cleanName = typeof imgName === "string" ? imgName.trim() : "";
+        if (cleanName && !cleanName.startsWith("http") && !cleanName.startsWith("/api/")) {
+          const lower = cleanName.toLowerCase();
+          if (!allImagesToUpload.some((x) => x.lower === lower)) {
+            allImagesToUpload.push({ original: cleanName, lower });
+          }
+        }
+      }
+    }
+
+    setUploadProgress({ current: 0, total: allImagesToUpload.length });
+
+    try {
+      // 1. Upload images sequentially
+      for (let i = 0; i < allImagesToUpload.length; i++) {
+        const { original, lower } = allImagesToUpload[i];
+        setUploadStatus(
+          `Uploading image ${i + 1} of ${allImagesToUpload.length}: ${original}...`
+        );
+        setUploadProgress({ current: i + 1, total: allImagesToUpload.length });
+
+        const file = imageFiles.get(lower) || imageFiles.get(original);
+        if (file) {
+          const formData = new FormData();
+          formData.append("image", file);
+          const res = await fetch("/api/admin/upload", {
+            method: "POST",
+            body: formData,
+          });
+          const resData = await res.json();
+          if (!res.ok) {
+            throw new Error(`Upload error for "${original}": ${resData.error || "Failed"}`);
+          }
+          uploadedUrlsCache.set(lower, resData.url);
+          uploadedUrlsCache.set(original, resData.url);
+          uploadedCount++;
+        }
+      }
+
+      // 2. Prepare product objects with replaced URLs
+      setUploadStatus("Saving dresses to boutique database...");
+      for (const item of parsedItems) {
+        const rawImgs = Array.isArray(item.images)
+          ? item.images
+          : (item.image ? [item.image] : []);
+
+        const finalImgs = rawImgs
+          .map((imgName) => {
+            if (typeof imgName !== "string") return "";
+            const trimmed = imgName.trim();
+            if (trimmed.startsWith("http") || trimmed.startsWith("/api/")) return trimmed;
+            return uploadedUrlsCache.get(trimmed.toLowerCase()) || uploadedUrlsCache.get(trimmed) || "";
+          })
+          .filter(Boolean);
+
+        processedProducts.push({
+          ...item,
+          images: finalImgs,
+          image: finalImgs[0] || "",
+        });
+      }
+
+      // 3. Send to backend bulk endpoint
+      const bulkResponse = await api("admin/products/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ products: processedProducts }),
+      });
+
+      setUploadSummary({
+        success: true,
+        count: bulkResponse.count || processedProducts.length,
+        imagesCount: uploadedCount,
+      });
+      setUploadStatus("Completed successfully!");
+      onComplete();
+    } catch (err) {
+      setUploadSummary({
+        success: false,
+        error: err.message || "Failed during bulk upload.",
+      });
+      setUploadStatus("Upload encountered an issue.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="bulk-uploader-card">
+      <div className="bulk-top-header">
+        <div>
+          <h2>⚡ Bulk Product Import</h2>
+          <p className="bulk-desc">
+            Import multiple dresses in one shot using your dress photos and an AI-generated JSON file.
+          </p>
+        </div>
+        <div className="bulk-quick-actions">
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => setShowAiGuide((prev) => !prev)}
+          >
+            {showAiGuide ? "Hide Mobile AI Guide ▲" : "🤖 Mobile AI Guide ▼"}
+          </button>
+          <button
+            type="button"
+            className="text-button"
+            onClick={copyAiPrompt}
+          >
+            {copiedPrompt ? "✓ Prompt Copied!" : "📋 Copy AI Prompt"}
+          </button>
+          <button
+            type="button"
+            className="text-button"
+            onClick={downloadSampleJson}
+          >
+            📥 Download Sample JSON
+          </button>
+        </div>
+      </div>
+
+      {showAiGuide && (
+        <div className="ai-guide-box">
+          <h3>📱 How to Generate Product JSON with ChatGPT / Gemini on Mobile:</h3>
+          <ol>
+            <li>
+              <b>Copy the Prompt:</b> Tap the <b>"Copy AI Prompt"</b> button above.
+            </li>
+            <li>
+              <b>Open AI App on Phone:</b> Open <b>ChatGPT</b> or <b>Google Gemini</b> app.
+            </li>
+            <li>
+              <b>Upload Your Dress Photos:</b> Select and attach all your boutique dress photos from your phone gallery.
+            </li>
+            <li>
+              <b>Paste Prompt & Send:</b> Paste the copied prompt. You can also specify any prices, e.g. <i>"All Kurtis buy ₹500, sell ₹1199; Dupattas buy ₹250, sell ₹550"</i>.
+            </li>
+            <li>
+              <b>Copy Output & Import:</b> Tap Copy on the AI response, switch back here, paste into <b>Step 2</b> below, select the photos, and click <b>Start Bulk Upload</b>!
+            </li>
+          </ol>
+        </div>
+      )}
+
+      {/* Step 1: Select Images */}
+      <div className="bulk-step-box">
+        <div className="bulk-step-title">
+          <span className="step-num">1</span>
+          <div>
+            <h3>Select Dress Photos (Folder or Multi-select)</h3>
+            <p>Choose the folder or multiple photos corresponding to the dresses in your JSON.</p>
+          </div>
+        </div>
+
+        <input
+          ref={folderInputRef}
+          type="file"
+          webkitdirectory=""
+          directory=""
+          multiple
+          style={{ display: "none" }}
+          onChange={handleImageFiles}
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="image/*"
+          style={{ display: "none" }}
+          onChange={handleImageFiles}
+        />
+
+        <div className="bulk-files-action-row">
+          <button
+            type="button"
+            className="button select-photos-btn"
+            onClick={() => folderInputRef.current?.click()}
+          >
+            📁 Choose Folder of Images
+          </button>
+          <button
+            type="button"
+            className="button select-photos-btn alt-btn"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            🖼️ Select Photos (Gallery / Files)
+          </button>
+          {imageFiles.size > 0 && (
+            <button
+              type="button"
+              className="text-button clear-btn"
+              onClick={() => setImageFiles(new Map())}
+            >
+              Clear selected photos
+            </button>
+          )}
+        </div>
+
+        {imageFiles.size > 0 && (
+          <div className="selected-photos-summary">
+            <span className="badge-photos-count">
+              ✓ <b>{imageFiles.size}</b> images selected
+            </span>
+            <div className="photo-names-chip-list">
+              {Array.from(imageFiles.keys())
+                .slice(0, 8)
+                .map((name, i) => (
+                  <span key={i} className="photo-name-chip">
+                    {name}
+                  </span>
+                ))}
+              {imageFiles.size > 8 && (
+                <span className="photo-name-chip more">
+                  +{imageFiles.size - 8} more
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Step 2: Provide JSON */}
+      <div className="bulk-step-box">
+        <div className="bulk-step-title">
+          <span className="step-num">2</span>
+          <div>
+            <h3>Provide Product JSON Data</h3>
+            <p>Paste the JSON generated from ChatGPT/Gemini, or upload a .json file.</p>
+          </div>
+        </div>
+
+        <div className="json-input-tabs">
+          <button
+            type="button"
+            className={`tab-toggle ${inputMode === "paste" ? "active" : ""}`}
+            onClick={() => setInputMode("paste")}
+          >
+            ✍️ Paste JSON Directly (Recommended for Mobile)
+          </button>
+          <button
+            type="button"
+            className={`tab-toggle ${inputMode === "file" ? "active" : ""}`}
+            onClick={() => setInputMode("file")}
+          >
+            📄 Upload .json File
+          </button>
+        </div>
+
+        {inputMode === "paste" ? (
+          <textarea
+            className="bulk-json-textarea"
+            placeholder="Paste your JSON array here (e.g. from ChatGPT or Gemini)..."
+            value={jsonText}
+            onChange={handleJsonTextChange}
+          />
+        ) : (
+          <div className="json-file-picker">
+            <input
+              ref={jsonFileInputRef}
+              type="file"
+              accept=".json,application/json"
+              onChange={handleJsonFileUpload}
+            />
+            {jsonText && <p className="json-loaded-hint">✓ JSON loaded ({parsedItems.length} items parsed)</p>}
+          </div>
+        )}
+
+        {parseError && (
+          <div className="json-status error">
+            ⚠️ <b>JSON Error:</b> {parseError}
+          </div>
+        )}
+
+        {parsedItems.length > 0 && !parseError && (
+          <div className="json-status success">
+            ✅ <b>Ready!</b> Parsed <b>{parsedItems.length}</b> dresses from JSON.
+          </div>
+        )}
+      </div>
+
+      {/* Step 3: Preview Table */}
+      {parsedItems.length > 0 && !parseError && (
+        <div className="bulk-step-box">
+          <div className="bulk-step-title">
+            <span className="step-num">3</span>
+            <div>
+              <h3>Import Preview ({parsedItems.length} Dresses)</h3>
+              <p>Review the items and photo match status before importing.</p>
+            </div>
+          </div>
+
+          <div className="bulk-preview-container">
+            <table className="bulk-preview-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Dress Name</th>
+                  <th>Category</th>
+                  <th>Buy / Fixed Price</th>
+                  <th>Sizes & Stock</th>
+                  <th>Photos Match Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {parsedItems.map((item, idx) => {
+                  const imgs = Array.isArray(item.images)
+                    ? item.images
+                    : (item.image ? [item.image] : []);
+                  const matchedCount = imgs.filter((img) => {
+                    if (typeof img !== "string") return false;
+                    const t = img.trim();
+                    return (
+                      t.startsWith("http") ||
+                      t.startsWith("/api/") ||
+                      imageFiles.has(t.toLowerCase()) ||
+                      imageFiles.has(t)
+                    );
+                  }).length;
+                  const allMatched = imgs.length > 0 && matchedCount === imgs.length;
+
+                  return (
+                    <tr key={idx}>
+                      <td>{idx + 1}</td>
+                      <td><b>{item.name || "Untitled"}</b></td>
+                      <td><span className="tag-category">{item.collection || "Kurtis"}</span></td>
+                      <td>
+                        ₹{Number(item.buyPrice || 0).toLocaleString("en-IN")} /{" "}
+                        <b>₹{Number(item.fixedPrice || item.price || 0).toLocaleString("en-IN")}</b>
+                      </td>
+                      <td className="sizes-preview-cell">
+                        {Array.isArray(item.sizes) ? item.sizes.join(", ") : String(item.sizes || "Free Size")}
+                      </td>
+                      <td>
+                        {imgs.length === 0 ? (
+                          <span className="match-pill warning">No image filename</span>
+                        ) : allMatched ? (
+                          <span className="match-pill success">
+                            ✅ {matchedCount} {matchedCount === 1 ? "photo" : "photos"} matched
+                          </span>
+                        ) : matchedCount > 0 ? (
+                          <span className="match-pill warning">
+                            ⚠️ {matchedCount}/{imgs.length} photos matched
+                          </span>
+                        ) : (
+                          <span className="match-pill danger">
+                            ❌ {imgs.length} photo(s) missing
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Upload Action */}
+          <div className="bulk-action-footer">
+            <button
+              type="button"
+              className="button bulk-upload-start-btn"
+              disabled={uploading || parsedItems.length === 0}
+              onClick={handleBulkUpload}
+            >
+              {uploading
+                ? "⏳ Uploading..."
+                : `🚀 Start Bulk Upload (${parsedItems.length} dresses)`}
+            </button>
+          </div>
+
+          {uploading && (
+            <div className="bulk-upload-progress-box">
+              <p className="progress-status-txt">{uploadStatus}</p>
+              {uploadProgress.total > 0 && (
+                <div className="progress-bar-track">
+                  <div
+                    className="progress-bar-fill"
+                    style={{
+                      width: `${Math.round((uploadProgress.current / uploadProgress.total) * 100)}%`,
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {uploadSummary && (
+            <div className={`bulk-summary-box ${uploadSummary.success ? "success" : "error"}`}>
+              {uploadSummary.success ? (
+                <div>
+                  <h4>🎉 Bulk Import Successful!</h4>
+                  <p>
+                    Added <b>{uploadSummary.count}</b> dresses with <b>{uploadSummary.imagesCount}</b> uploaded photos to Papa's Boutique.
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <h4>⚠️ Upload Error</h4>
+                  <p>{uploadSummary.error}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Admin() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [password, setPassword] = useState("");
@@ -828,6 +1450,10 @@ function Admin() {
   const [editing, setEditing] = useState(null);
   const [message, setMessage] = useState("");
   const [soldProduct, setSoldProduct] = useState(null);
+  const [activeTab, setActiveTab] = useState("single"); // "single" | "bulk"
+  const [adminStatusFilter, setAdminStatusFilter] = useState("ALL");
+  const [adminCategoryFilter, setAdminCategoryFilter] = useState("ALL");
+  const [adminSearch, setAdminSearch] = useState("");
   const navigate = useNavigate();
 
   const load = () =>
@@ -906,6 +1532,7 @@ function Admin() {
   };
 
   const edit = (product) => {
+    setActiveTab("single");
     const imagesList = product.images?.length
       ? product.images
       : product.image
@@ -1010,9 +1637,28 @@ function Admin() {
         </div>
       </div>
 
-      <form className="editor" onSubmit={save}>
-        <label>
-          Item name
+      {/* Tabs Switcher: Single Item vs Bulk Import */}
+      <div className="admin-tabs">
+        <button
+          type="button"
+          className={`admin-tab-btn ${activeTab === "single" ? "active" : ""}`}
+          onClick={() => setActiveTab("single")}
+        >
+          📝 {editing ? "Edit Item Form" : "Single Item Entry"}
+        </button>
+        <button
+          type="button"
+          className={`admin-tab-btn ${activeTab === "bulk" ? "active" : ""}`}
+          onClick={() => setActiveTab("bulk")}
+        >
+          ⚡ Bulk Import (JSON + Images Folder)
+        </button>
+      </div>
+
+      {activeTab === "single" ? (
+        <form className="editor" onSubmit={save}>
+          <label>
+            Item name
           <input
             required
             type="text"
@@ -1154,6 +1800,9 @@ function Admin() {
         )}
         <p>{message}</p>
       </form>
+      ) : (
+        <BulkUploader onComplete={load} />
+      )}
 
       {/* Category Management Overview */}
       <div className="admin-category-panel">
@@ -1161,8 +1810,14 @@ function Admin() {
         <div className="category-badges">
           {Array.from(new Set(products.map((p) => p.collection))).map((cat) => {
             const count = products.filter((p) => p.collection === cat).length;
+            const isSelected = adminCategoryFilter === cat;
             return (
-              <div key={cat} className="category-badge">
+              <div
+                key={cat}
+                className={`category-badge clickable ${isSelected ? "active" : ""}`}
+                onClick={() => setAdminCategoryFilter(isSelected ? "ALL" : cat)}
+                title={`Click to filter by ${cat}`}
+              >
                 <span className="cat-name">{cat}</span>
                 <span className="cat-count">{count} {count === 1 ? "item" : "items"}</span>
               </div>
@@ -1172,7 +1827,10 @@ function Admin() {
       </div>
 
       <div className="section-heading">
-        <h2>Current catalogue & Inventory</h2>
+        <div>
+          <h2>Current catalogue &amp; Inventory</h2>
+          <p className="admin-subtitle">Filter by status or item type, manage visibility, record sales, and export stock.</p>
+        </div>
         <button
           type="button"
           className="button excel-export-btn"
@@ -1182,8 +1840,174 @@ function Admin() {
         </button>
       </div>
 
+      {/* Admin Multi-level Filter System */}
+      <div className="admin-filter-container">
+        {/* Row 1: Status Filters */}
+        <div className="filter-group-block">
+          <span className="filter-group-label">Status Filter:</span>
+          <div className="filter-pills-row">
+            <button
+              type="button"
+              className={`filter-pill-btn ${adminStatusFilter === "ALL" ? "active" : ""}`}
+              onClick={() => setAdminStatusFilter("ALL")}
+            >
+              All Items ({products.length})
+            </button>
+            <button
+              type="button"
+              className={`filter-pill-btn status-enabled ${adminStatusFilter === "ENABLED" ? "active" : ""}`}
+              onClick={() => setAdminStatusFilter("ENABLED")}
+            >
+              ● Active ({products.filter((p) => p.published).length})
+            </button>
+            <button
+              type="button"
+              className={`filter-pill-btn status-disabled ${adminStatusFilter === "DISABLED" ? "active" : ""}`}
+              onClick={() => setAdminStatusFilter("DISABLED")}
+            >
+              ○ Disabled ({products.filter((p) => !p.published).length})
+            </button>
+            <button
+              type="button"
+              className={`filter-pill-btn status-soldout ${adminStatusFilter === "SOLDOUT" ? "active" : ""}`}
+              onClick={() => setAdminStatusFilter("SOLDOUT")}
+            >
+              🔴 Sold Out ({products.filter((p) => Object.values(p.stock || {}).reduce((s, q) => s + (Number(q) || 0), 0) <= 0).length})
+            </button>
+            <button
+              type="button"
+              className={`filter-pill-btn status-soldhistory ${adminStatusFilter === "SOLD_ITEMS" ? "active" : ""}`}
+              onClick={() => setAdminStatusFilter("SOLD_ITEMS")}
+            >
+              💰 Sold ({products.filter((p) => (Number(p.soldCount) || 0) > 0).length})
+            </button>
+          </div>
+        </div>
+
+        {/* Row 2: Item Type / Category Filter */}
+        <div className="filter-group-block">
+          <span className="filter-group-label">Category / Item Type:</span>
+          <div className="filter-pills-row">
+            <button
+              type="button"
+              className={`filter-pill-btn ${adminCategoryFilter === "ALL" ? "active" : ""}`}
+              onClick={() => setAdminCategoryFilter("ALL")}
+            >
+              All Types ({products.length})
+            </button>
+            {Array.from(new Set(products.map((p) => p.collection))).filter(Boolean).map((cat) => {
+              const count = products.filter((p) => p.collection === cat).length;
+              return (
+                <button
+                  key={cat}
+                  type="button"
+                  className={`filter-pill-btn ${adminCategoryFilter === cat ? "active" : ""}`}
+                  onClick={() => setAdminCategoryFilter(cat)}
+                >
+                  {cat} ({count})
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Row 3: Admin Search & Filter Summary */}
+        <div className="admin-search-row">
+          <div className="search admin-search-input">
+            <span aria-hidden="true">⌕</span>
+            <input
+              type="text"
+              placeholder="Search catalogue by dress name, category, colour..."
+              value={adminSearch}
+              onChange={(e) => setAdminSearch(e.target.value)}
+            />
+            {adminSearch && (
+              <button
+                type="button"
+                className="search-clear-btn"
+                onClick={() => setAdminSearch("")}
+                title="Clear search"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+
+          <div className="admin-filter-status-summary">
+            <span>
+              Showing <b>{
+                products.filter((p) => {
+                  const totalStock = Object.values(p.stock || {}).reduce((sum, qty) => sum + (Number(qty) || 0), 0);
+                  const soldCount = Number(p.soldCount) || 0;
+                  if (adminStatusFilter === "ENABLED" && !p.published) return false;
+                  if (adminStatusFilter === "DISABLED" && p.published) return false;
+                  if (adminStatusFilter === "SOLDOUT" && totalStock > 0) return false;
+                  if (adminStatusFilter === "SOLD_ITEMS" && soldCount <= 0) return false;
+                  if (adminCategoryFilter !== "ALL" && p.collection !== adminCategoryFilter) return false;
+                  if (adminSearch.trim()) {
+                    const q = adminSearch.trim().toLowerCase();
+                    const searchString = `${p.name} ${p.collection} ${p.description || ""} ${(p.colours || []).join(" ")}`.toLowerCase();
+                    if (!searchString.includes(q)) return false;
+                  }
+                  return true;
+                }).length
+              }</b> of <b>{products.length}</b> products
+            </span>
+            {(adminStatusFilter !== "ALL" || adminCategoryFilter !== "ALL" || adminSearch) && (
+              <button
+                type="button"
+                className="text-button reset-filter-btn"
+                onClick={() => {
+                  setAdminStatusFilter("ALL");
+                  setAdminCategoryFilter("ALL");
+                  setAdminSearch("");
+                }}
+              >
+                Reset Filters
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
       <div className="inventory">
-        {products.map((product) => {
+        {(() => {
+          const filtered = products.filter((p) => {
+            const totalStock = Object.values(p.stock || {}).reduce((sum, qty) => sum + (Number(qty) || 0), 0);
+            const soldCount = Number(p.soldCount) || 0;
+            if (adminStatusFilter === "ENABLED" && !p.published) return false;
+            if (adminStatusFilter === "DISABLED" && p.published) return false;
+            if (adminStatusFilter === "SOLDOUT" && totalStock > 0) return false;
+            if (adminStatusFilter === "SOLD_ITEMS" && soldCount <= 0) return false;
+            if (adminCategoryFilter !== "ALL" && p.collection !== adminCategoryFilter) return false;
+            if (adminSearch.trim()) {
+              const q = adminSearch.trim().toLowerCase();
+              const searchString = `${p.name} ${p.collection} ${p.description || ""} ${(p.colours || []).join(" ")}`.toLowerCase();
+              if (!searchString.includes(q)) return false;
+            }
+            return true;
+          });
+
+          if (filtered.length === 0) {
+            return (
+              <div className="empty-inventory-notice">
+                <p>No products match your selected filters (Status: {adminStatusFilter}, Category: {adminCategoryFilter}).</p>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => {
+                    setAdminStatusFilter("ALL");
+                    setAdminCategoryFilter("ALL");
+                    setAdminSearch("");
+                  }}
+                >
+                  Clear All Filters
+                </button>
+              </div>
+            );
+          }
+
+          return filtered.map((product) => {
           const totalStock = Object.values(product.stock || {}).reduce(
             (sum, qty) => sum + (Number(qty) || 0),
             0,
@@ -1236,7 +2060,8 @@ function Admin() {
               </div>
             </article>
           );
-        })}
+        });
+      })()}
       </div>
 
       {soldProduct && (
