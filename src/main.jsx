@@ -9,8 +9,56 @@ import {
   useLocation,
   useParams,
 } from "react-router-dom";
+import JSZip from "jszip";
 import "./styles.css";
 import { whatsappNumber } from "./config";
+
+function normalizeImageName(str) {
+  if (!str || typeof str !== "string") return "";
+  const base = str.split("/").pop().split("\\").pop().toLowerCase();
+  return base.replace(/\.[a-z0-9]+$/i, "").trim();
+}
+
+function findMatchingImageFile(targetName, imageFilesMap) {
+  if (!targetName || !(imageFilesMap instanceof Map) || imageFilesMap.size === 0) return null;
+  const rawTarget = targetName.split("/").pop().split("\\").pop().trim();
+  const lowerTarget = rawTarget.toLowerCase();
+
+  // 1. Direct match (exact or lowercase)
+  if (imageFilesMap.has(rawTarget)) return imageFilesMap.get(rawTarget);
+  if (imageFilesMap.has(lowerTarget)) return imageFilesMap.get(lowerTarget);
+
+  // 2. Basename match without extension (e.g. "dress1.jpg" matches "dress1.png")
+  const targetNorm = normalizeImageName(rawTarget);
+  for (const [key, file] of imageFilesMap.entries()) {
+    if (normalizeImageName(key) === targetNorm) {
+      return file;
+    }
+  }
+
+  // 3. Strip trailing suffixes like _2, _1, -2, -1, (1), (2), _front, _back, etc.
+  // If AI generated "photo_2.jpg" and user has "photo.jpg" (or vice-versa), this matches!
+  const stripSuffix = (s) => s.replace(/([-_][0-9]+|[-_](front|back|side|detail|zoom|angle|edit|copy)|[\s_]\([0-9]+\))$/i, "");
+  const targetStripped = stripSuffix(targetNorm);
+
+  for (const [key, file] of imageFilesMap.entries()) {
+    const keyNorm = normalizeImageName(key);
+    const keyStripped = stripSuffix(keyNorm);
+    if (targetStripped && keyStripped && targetStripped === keyStripped) {
+      return file;
+    }
+  }
+
+  // 4. Starts with match (e.g. "IMG_0012" in "IMG_0012_something")
+  for (const [key, file] of imageFilesMap.entries()) {
+    const keyNorm = normalizeImageName(key);
+    if (keyNorm.length >= 4 && (keyNorm.startsWith(targetNorm) || targetNorm.startsWith(keyNorm))) {
+      return file;
+    }
+  }
+
+  return null;
+}
 
 const heroImages = [
   {
@@ -999,19 +1047,26 @@ function SoldModal({ product, onClose, onSoldSuccess }) {
 }
 
 const AI_PROMPT_TEMPLATE = `You are a fashion cataloguer for "PAPA'S BOUTIQUE".
-I am uploading photos of boutique dresses/clothing. Carefully analyze each photo and generate a clean, valid JSON array for our store inventory.
+I am uploading boutique dress/clothing photos (or a ZIP file containing photos). Carefully inspect each photo and generate a clean, valid JSON array for our store inventory.
 
-CRITICAL INSTRUCTIONS:
-1. DETECT MULTIPLE IMAGES FOR A SINGLE PRODUCT:
-   - If multiple photos show the SAME dress from different angles (front, back, neckline, embroidery close-up), group them together under ONE single product.
-   - Put all photo filenames for that dress in the "images" array.
+CRITICAL FILENAME & MATCHING RULES (EXTREMELY IMPORTANT):
+1. USE VERBATIM FILENAMES ONLY:
+   - You MUST write the EXACT original filename of each image (e.g. "IMG_2041.jpg", "DSC_0045.png", "kurti_red.jpg").
+   - NEVER rename files.
+   - NEVER append artificial suffixes like "_2", "_1", "-1", "-2", "_front", "_back", or "_copy" to the image names.
+   - If a file is named "kurti_red.jpg", write EXACTLY "kurti_red.jpg", NEVER "kurti_red_2.jpg".
+   - If images are provided in a ZIP archive, inspect/unzip the archive and use the exact file names stored inside (without any folder paths).
 
-2. DETECT MULTI-COLOR VARIANTS:
+2. GROUP MULTIPLE PHOTOS OF THE SAME DRESS:
+   - If multiple photos show the SAME dress from different angles (front, back, neckline, embroidery close-up), group them together under ONE single product in the JSON.
+   - Put all the exact photo filenames for that dress in the "images" array.
+
+3. DETECT MULTI-COLOR VARIANTS:
    - If the same design/pattern is photographed in multiple colors, group them as ONE product design.
    - List all available colors in the "colours" array.
    - In "colorVariants", map each color to its exact photo filename(s).
 
-3. DO NOT GENERATE PRICES, SIZES, OR STOCK COUNTS:
+4. DO NOT GENERATE PRICES, SIZES, OR STOCK COUNTS:
    - Leave pricing (buyPrice, fixedPrice) and sizes/counts OUT of the JSON. The boutique admin will enter these in the admin panel.
 
 REQUIRED JSON FORMAT:
@@ -1024,23 +1079,23 @@ REQUIRED JSON FORMAT:
     "colorVariants": [
       {
         "colour": "Primary Color",
-        "images": ["photo1_front.jpg", "photo1_back.jpg"]
+        "images": ["IMG_0012.jpg", "IMG_0013.jpg"]
       },
       {
         "colour": "Secondary Color",
-        "images": ["photo2_color2.jpg"]
+        "images": ["IMG_0014.jpg"]
       }
     ],
     "images": [
-      "photo1_front.jpg",
-      "photo1_back.jpg",
-      "photo2_color2.jpg"
+      "IMG_0012.jpg",
+      "IMG_0013.jpg",
+      "IMG_0014.jpg"
     ]
   }
 ]
 
 IMPORTANT:
-- Use the exact filename of each uploaded image.
+- Use the exact filenames without modifying them or appending suffixes.
 - Return ONLY the raw JSON array inside a \`\`\`json ... \`\`\` block without conversational preamble.`;
 
 const SAMPLE_JSON_DATA = [
@@ -1093,7 +1148,7 @@ const SAMPLE_JSON_DATA = [
   },
 ];
 
-function BulkUploader({ onComplete, onStartAutofillQueue }) {
+function BulkUploader({ onComplete }) {
   const [imageFiles, setImageFiles] = useState(new Map());
   const [jsonText, setJsonText] = useState("");
   const [inputMode, setInputMode] = useState("paste"); // "paste" | "file"
@@ -1102,11 +1157,12 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
-  const [uploadSummary, setUploadSummary] = useState(null);
   const [showAiGuide, setShowAiGuide] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
+  const [zipLoading, setZipLoading] = useState(false);
 
   const folderInputRef = React.useRef(null);
+  const zipInputRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
   const jsonFileInputRef = React.useRef(null);
 
@@ -1119,6 +1175,53 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
       newMap.set(f.name.trim(), f);
     }
     setImageFiles(newMap);
+  };
+
+  const handleZipFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setZipLoading(true);
+    try {
+      const zip = await JSZip.loadAsync(file);
+      const newMap = new Map(imageFiles);
+      const imageExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"];
+      let count = 0;
+
+      const entries = Object.values(zip.files).filter((entry) => {
+        if (entry.dir) return false;
+        const lower = entry.name.toLowerCase();
+        if (lower.includes("__macosx") || lower.startsWith(".")) return false;
+        return imageExtensions.some((ext) => lower.endsWith(ext));
+      });
+
+      for (const entry of entries) {
+        const blob = await entry.async("blob");
+        const filename = entry.name.split("/").pop().split("\\").pop().trim();
+        const ext = filename.split(".").pop().toLowerCase();
+        const mime =
+          ext === "png"
+            ? "image/png"
+            : ext === "webp"
+            ? "image/webp"
+            : ext === "gif"
+            ? "image/gif"
+            : ext === "avif"
+            ? "image/avif"
+            : "image/jpeg";
+        const imgFile = new File([blob], filename, { type: mime });
+        newMap.set(filename.toLowerCase(), imgFile);
+        newMap.set(filename, imgFile);
+        count++;
+      }
+
+      setImageFiles(newMap);
+      alert(`✅ Extracted ${count} images from "${file.name}"!`);
+    } catch (err) {
+      alert("Failed to extract ZIP: " + err.message);
+    } finally {
+      setZipLoading(false);
+      if (zipInputRef.current) zipInputRef.current.value = "";
+    }
   };
 
   const tryParseJson = (raw) => {
@@ -1188,10 +1291,10 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
     });
   };
 
-  const handleAutofillQueue = async () => {
+  const handleUploadToPendings = async () => {
     if (!parsedItems.length) return;
     setUploading(true);
-    setUploadStatus("Matching and uploading photos...");
+    setUploadStatus("Matching and uploading photos to boutique storage...");
 
     const uploadedUrlsCache = new Map();
     const allImagesToUpload = [];
@@ -1221,7 +1324,7 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
         );
         setUploadProgress({ current: i + 1, total: allImagesToUpload.length });
 
-        const file = imageFiles.get(lower) || imageFiles.get(original);
+        const file = findMatchingImageFile(original, imageFiles);
         if (file) {
           const formData = new FormData();
           formData.append("image", file);
@@ -1235,10 +1338,11 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
           }
           uploadedUrlsCache.set(lower, resData.url);
           uploadedUrlsCache.set(original, resData.url);
+          uploadedUrlsCache.set(normalizeImageName(original), resData.url);
         }
       }
 
-      setUploadStatus("Photos uploaded! Loading into Admin Form...");
+      setUploadStatus("Saving dresses into Pending Review category...");
       const prepared = parsedItems.map((item) => {
         const rawImgs = Array.isArray(item.images)
           ? item.images
@@ -1249,26 +1353,51 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
             if (typeof imgName !== "string") return "";
             const trimmed = imgName.trim();
             if (trimmed.startsWith("http") || trimmed.startsWith("/api/")) return trimmed;
-            return uploadedUrlsCache.get(trimmed.toLowerCase()) || uploadedUrlsCache.get(trimmed) || "";
+            return (
+              uploadedUrlsCache.get(trimmed.toLowerCase()) ||
+              uploadedUrlsCache.get(trimmed) ||
+              uploadedUrlsCache.get(normalizeImageName(trimmed)) ||
+              ""
+            );
           })
           .filter(Boolean);
 
         return {
-          ...item,
+          name: item.name || "Untitled Dress",
+          collection: item.collection || "Kurtis",
+          description: item.description || "",
+          colours: Array.isArray(item.colours) ? item.colours : (typeof item.colours === "string" ? item.colours.split(",").map(c => c.trim()).filter(Boolean) : []),
+          colorVariants: item.colorVariants || [],
           images: finalImgs,
           image: finalImgs[0] || "",
           buyPrice: "",
           fixedPrice: "",
+          price: 0,
           sizes: [],
           stock: {},
+          pending: true,
+          status: "PENDING",
+          published: false,
         };
       });
 
-      if (onStartAutofillQueue) {
-        onStartAutofillQueue(prepared);
+      const bulkRes = await fetch("/api/admin/products/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ products: prepared }),
+      });
+      const bulkData = await bulkRes.json();
+      if (!bulkRes.ok) {
+        throw new Error(bulkData.error || "Failed to save products in bulk.");
+      }
+
+      alert(`🎉 Successfully uploaded photos and saved ${prepared.length} dresses under the Pendings category!`);
+
+      if (onComplete) {
+        await onComplete("pending");
       }
     } catch (err) {
-      alert("Error preparing photos: " + err.message);
+      alert("Error uploading to Pendings: " + err.message);
     } finally {
       setUploading(false);
     }
@@ -1278,9 +1407,9 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
     <div className="bulk-uploader-card">
       <div className="bulk-top-header">
         <div>
-          <h2>⚡ Bulk Import &amp; Autofill</h2>
+          <h2>⚡ Bulk Import to Pendings</h2>
           <p className="bulk-desc">
-            Load your photos &amp; AI-generated JSON. Photos will be uploaded and dress details will be autofilled into the Admin Form for quick price &amp; size entry.
+            Load photos (Folder, ZIP, or Gallery) &amp; AI-generated JSON. Photos will be uploaded and dresses will be saved under the <strong>Pendings Category</strong> for you to complete prices and sizes.
           </p>
         </div>
         <div className="bulk-quick-actions">
@@ -1289,7 +1418,7 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
             className="text-button"
             onClick={() => setShowAiGuide((prev) => !prev)}
           >
-            {showAiGuide ? "Hide Mobile AI Guide ▲" : "🤖 Mobile AI Guide ▼"}
+            {showAiGuide ? "Hide AI & ZIP Guide ▲" : "🤖 Mobile AI & ZIP Guide ▼"}
           </button>
           <button
             type="button"
@@ -1310,22 +1439,26 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
 
       {showAiGuide && (
         <div className="ai-guide-box">
-          <h3>📱 How to Generate Product JSON with ChatGPT / Gemini on Mobile:</h3>
+          <h3>📱 How to Generate Product JSON with ChatGPT / Gemini (with ZIP or Photos):</h3>
           <ol>
             <li>
               <b>Copy the Prompt:</b> Tap <b>"Copy AI Prompt"</b> above.
             </li>
             <li>
-              <b>Open AI App:</b> Open <b>ChatGPT</b> or <b>Google Gemini</b> app on your phone.
+              <b>Upload to AI (ZIP or Photos):</b>
+              <ul>
+                <li>If you have <b>more than 20 photos</b>: Compress your photos into a single <b>.zip file</b> (e.g. <code>dresses.zip</code>) on your phone or PC, and attach the .zip file in <b>ChatGPT</b> (with Code Interpreter) or <b>Gemini</b>!</li>
+                <li>Or select multiple individual photos directly.</li>
+              </ul>
             </li>
             <li>
-              <b>Upload Your Dress Photos:</b> Select all your dress photos (AI will automatically group multiple angles and color variants of the same dress!).
+              <b>Paste Prompt &amp; Run:</b> Send the prompt. The AI will inspect the photos and use the <b>exact original filenames</b> without adding suffixes like <code>_2</code>.
             </li>
             <li>
-              <b>Paste Prompt:</b> Paste the copied prompt and send. (AI will describe each dress and detect colors/photos without guessing prices or sizes).
+              <b>Upload to Papa's Boutique:</b> Select your photos folder or the same <b>.zip file</b> in <b>Step 1</b>, paste the JSON in <b>Step 2</b>, and click <b>"Upload Photos &amp; Save All to Pendings"</b>!
             </li>
             <li>
-              <b>Copy JSON &amp; Autofill:</b> Copy the AI response, paste into <b>Step 2</b> below, choose the photos in <b>Step 1</b>, and tap <b>"Upload Photos &amp; Autofill Admin Form"</b>!
+              <b>Complete in Pendings Tab:</b> All items will be saved under the <b>⏳ Pending Items</b> category where you can enter prices and pick sizes whenever you want!
             </li>
           </ol>
         </div>
@@ -1336,8 +1469,8 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
         <div className="bulk-step-title">
           <span className="step-num">1</span>
           <div>
-            <h3>Select Dress Photos (Folder or Multi-select)</h3>
-            <p>Choose the folder or multiple photos corresponding to the dresses in your JSON.</p>
+            <h3>Select Dress Photos (Folder, ZIP file, or Multi-select)</h3>
+            <p>Choose the folder, a .zip archive, or multiple photos corresponding to the dresses in your JSON.</p>
           </div>
         </div>
 
@@ -1349,6 +1482,13 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
           multiple
           style={{ display: "none" }}
           onChange={handleImageFiles}
+        />
+        <input
+          ref={zipInputRef}
+          type="file"
+          accept=".zip,application/zip"
+          style={{ display: "none" }}
+          onChange={handleZipFile}
         />
         <input
           ref={fileInputRef}
@@ -1366,6 +1506,14 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
             onClick={() => folderInputRef.current?.click()}
           >
             📁 Choose Folder of Images
+          </button>
+          <button
+            type="button"
+            className="button select-photos-btn zip-btn"
+            disabled={zipLoading}
+            onClick={() => zipInputRef.current?.click()}
+          >
+            {zipLoading ? "⏳ Extracting ZIP..." : "📦 Upload ZIP File (.zip)"}
           </button>
           <button
             type="button"
@@ -1388,7 +1536,7 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
         {imageFiles.size > 0 && (
           <div className="selected-photos-summary">
             <span className="badge-photos-count">
-              ✓ <b>{imageFiles.size}</b> images selected
+              ✓ <b>{imageFiles.size}</b> images ready for upload
             </span>
             <div className="photo-names-chip-list">
               {Array.from(imageFiles.keys())
@@ -1474,7 +1622,7 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
             <span className="step-num">3</span>
             <div>
               <h3>Import Preview ({parsedItems.length} Dresses)</h3>
-              <p>Review dresses and photo matches before autofilling into the form.</p>
+              <p>Review dresses and photo matches. Suffixes like _2 or -1 are automatically matched to the base photo name.</p>
             </div>
           </div>
 
@@ -1497,12 +1645,8 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
                   const matchedCount = imgs.filter((img) => {
                     if (typeof img !== "string") return false;
                     const t = img.trim();
-                    return (
-                      t.startsWith("http") ||
-                      t.startsWith("/api/") ||
-                      imageFiles.has(t.toLowerCase()) ||
-                      imageFiles.has(t)
-                    );
+                    if (t.startsWith("http") || t.startsWith("/api/")) return true;
+                    return Boolean(findMatchingImageFile(t, imageFiles));
                   }).length;
                   const allMatched = imgs.length > 0 && matchedCount === imgs.length;
 
@@ -1538,17 +1682,17 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
             </table>
           </div>
 
-          {/* Autofill Queue Action Button */}
+          {/* Action Button: Upload Photos & Save All to Pendings */}
           <div className="bulk-action-footer">
             <button
               type="button"
               className="button bulk-upload-start-btn"
               disabled={uploading || parsedItems.length === 0}
-              onClick={handleAutofillQueue}
+              onClick={handleUploadToPendings}
             >
               {uploading
-                ? "⏳ Uploading Photos..."
-                : `⚡ Upload Photos & Autofill Admin Form (${parsedItems.length} ${parsedItems.length === 1 ? "dress" : "dresses"})`}
+                ? "⏳ Uploading Photos & Saving to Pendings..."
+                : `⚡ Upload Photos & Save All to Pendings (${parsedItems.length} ${parsedItems.length === 1 ? "dress" : "dresses"})`}
             </button>
           </div>
 
@@ -1573,6 +1717,245 @@ function BulkUploader({ onComplete, onStartAutofillQueue }) {
   );
 }
 
+function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
+  const [buyPrice, setBuyPrice] = useState(
+    product.buyPrice !== undefined && product.buyPrice !== null && product.buyPrice !== 0
+      ? String(product.buyPrice)
+      : ""
+  );
+  const [fixedPrice, setFixedPrice] = useState(
+    product.fixedPrice || product.price ? String(product.fixedPrice || product.price) : ""
+  );
+  const [sizes, setSizes] = useState(
+    Array.isArray(product.sizes)
+      ? product.sizes
+      : typeof product.sizes === "string"
+      ? product.sizes.split(",").map((s) => s.trim()).filter(Boolean)
+      : []
+  );
+  const [stock, setStock] = useState(
+    typeof product.stock === "object" && product.stock !== null ? product.stock : {}
+  );
+  const [saving, setSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const handlePublish = async () => {
+    setErrorMsg("");
+    const buyPriceNum = Number(buyPrice);
+    const fixedPriceNum = Number(fixedPrice);
+
+    if (buyPrice === "" || isNaN(buyPriceNum) || buyPriceNum < 0) {
+      setErrorMsg("⚠️ Buy Price is mandatory. Please enter cost price.");
+      return;
+    }
+    if (fixedPrice === "" || isNaN(fixedPriceNum) || fixedPriceNum <= 0) {
+      setErrorMsg("⚠️ Fixed Price is mandatory. Please enter selling price.");
+      return;
+    }
+    if (!sizes.length) {
+      setErrorMsg("⚠️ Please select at least one available size.");
+      return;
+    }
+    const totalQty = Object.values(stock).reduce((s, q) => s + (Number(q) || 0), 0);
+    if (totalQty <= 0) {
+      setErrorMsg("⚠️ Quantity must be at least 1 piece for selected size(s).");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const response = await fetch("/api/admin/products", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...product,
+          buyPrice: buyPriceNum,
+          fixedPrice: fixedPriceNum,
+          price: fixedPriceNum,
+          sizes,
+          stock,
+          pending: false,
+          status: "ACTIVE",
+          published: true,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to publish product.");
+      onSaveSuccess(product.id, data.product);
+    } catch (err) {
+      setErrorMsg(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const imagesList = product.images?.length
+    ? product.images
+    : product.image
+    ? [product.image]
+    : [];
+
+  return (
+    <div className="pending-item-card">
+      <div className="pending-card-header">
+        <div className="pending-img-thumb">
+          <img
+            src={imagesList[0] || "/placeholder.jpg"}
+            alt={product.name}
+            onError={(e) => {
+              e.target.src =
+                "data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%2280%22%20height%3D%22100%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Crect%20fill%3D%22%23eee%22%20width%3D%2280%22%20height%3D%22100%22%2F%3E%3Ctext%20fill%3D%22%23aaa%22%20font-size%3D%2211%22%20x%3D%2250%25%22%20y%3D%2250%25%22%20text-anchor%3D%22middle%22%3ENo%20Img%3C%2Ftext%3E%3C%2Fsvg%3E";
+            }}
+          />
+          {imagesList.length > 1 && (
+            <span className="pending-img-count">📸 {imagesList.length} photos</span>
+          )}
+        </div>
+
+        <div className="pending-info">
+          <div className="pending-badges-row">
+            <span className="badge-pending-tag">⏳ PENDING DETAILS</span>
+            <span className="tag-category">{product.collection || "Kurtis"}</span>
+            {product.colours && (
+              <span className="pending-colour-badge">
+                🎨 {Array.isArray(product.colours) ? product.colours.join(", ") : product.colours}
+              </span>
+            )}
+          </div>
+          <h3 className="pending-product-name">{product.name}</h3>
+          <p className="pending-desc">{product.description}</p>
+        </div>
+
+        <div className="pending-top-actions">
+          <button
+            type="button"
+            className="button-secondary edit-full-btn"
+            onClick={() => onEditFull(product)}
+            title="Edit all fields in main editor"
+          >
+            ✏️ Full Edit
+          </button>
+          <button
+            type="button"
+            className="button-secondary delete-pending-btn"
+            onClick={() => onDelete(product.id)}
+            title="Discard this pending product"
+          >
+            🗑️ Discard
+          </button>
+        </div>
+      </div>
+
+      <div className="pending-card-body">
+        <div className="pending-fields-grid">
+          <div className="pending-field-group">
+            <label>
+              Buy Price (₹) <span className="mandatory-star">*</span>
+              <span className="helper-txt">(Cost price per unit - Mandatory)</span>
+            </label>
+            <input
+              type="number"
+              min="0"
+              placeholder="e.g. 1500"
+              value={buyPrice}
+              onChange={(e) => setBuyPrice(e.target.value)}
+            />
+          </div>
+
+          <div className="pending-field-group">
+            <label>
+              Fixed Price (₹) <span className="mandatory-star">*</span>
+              <span className="helper-txt">(Selling / Retail price - Mandatory)</span>
+            </label>
+            <input
+              type="number"
+              min="0"
+              placeholder="e.g. 2990"
+              value={fixedPrice}
+              onChange={(e) => setFixedPrice(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="pending-size-section">
+          <div className="field-group-header">
+            <span className="field-group-title">
+              Available Sizes &amp; Stock Count <span className="mandatory-star">*</span>
+            </span>
+            <span className="field-group-subtitle">
+              Click any size to select (defaults to 1 piece). Adjust quantities with + / - buttons.
+            </span>
+          </div>
+          <SizeStockSelector
+            selectedSizes={sizes}
+            stock={stock}
+            onChange={(newSizes, newStock) => {
+              setSizes(newSizes);
+              setStock(newStock);
+            }}
+          />
+        </div>
+
+        {errorMsg && <p className="pending-error-banner">{errorMsg}</p>}
+
+        <div className="pending-card-footer">
+          <button
+            type="button"
+            className="button complete-publish-btn"
+            disabled={saving}
+            onClick={handlePublish}
+          >
+            {saving ? "⏳ Publishing..." : "✓ Complete & Move to Live Store"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PendingReviewList({ products, onRefresh, onEditFull, onDelete }) {
+  const pendingProducts = products.filter((p) => p.pending || p.status === "PENDING");
+
+  const handleSaveSuccess = () => {
+    onRefresh();
+  };
+
+  if (pendingProducts.length === 0) {
+    return (
+      <div className="empty-pending-box">
+        <span className="empty-pending-icon">🎉</span>
+        <h3>No Pending Items!</h3>
+        <p>All dresses have complete details and are active in your boutique catalogue.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="pending-review-section">
+      <div className="pending-section-banner">
+        <div>
+          <h2>⏳ Pending Review ({pendingProducts.length} Dresses)</h2>
+          <p>
+            These dresses were imported with partial data from AI JSON. Enter the <strong>Buy Price</strong>, <strong>Fixed Price</strong>, and choose <strong>Sizes</strong> on each card below, then click <strong>"Complete &amp; Move to Live Store"</strong>.
+          </p>
+        </div>
+      </div>
+
+      <div className="pending-cards-list">
+        {pendingProducts.map((p) => (
+          <PendingItemCard
+            key={p.id}
+            product={p}
+            onSaveSuccess={handleSaveSuccess}
+            onEditFull={onEditFull}
+            onDelete={onDelete}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Admin() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [password, setPassword] = useState("");
@@ -1589,15 +1972,19 @@ function Admin() {
   const [queueIndex, setQueueIndex] = useState(0);
   const navigate = useNavigate();
 
-  const load = () =>
+  const load = (targetTab) =>
     api("admin/products")
       .then(({ products }) => {
         setProducts(products);
         setLoggedIn(true);
+        if (targetTab) setActiveTab(targetTab);
       })
       .catch(() => setLoggedIn(false));
 
-  useEffect(load, []);
+  const pendingProducts = products.filter((p) => p.pending || p.status === "PENDING");
+  const liveProducts = products.filter((p) => !p.pending && p.status !== "PENDING");
+
+  useEffect(() => { load(); }, []);
 
   const login = async (event) => {
     event.preventDefault();
@@ -1850,7 +2237,7 @@ function Admin() {
         </div>
       </div>
 
-      {/* Tabs Switcher: Single Item vs Bulk Import */}
+      {/* Tabs Switcher: Single Item vs Bulk Import vs Pending Items */}
       <div className="admin-tabs">
         <button
           type="button"
@@ -1864,7 +2251,17 @@ function Admin() {
           className={`admin-tab-btn ${activeTab === "bulk" ? "active" : ""}`}
           onClick={() => setActiveTab("bulk")}
         >
-          ⚡ Bulk Import (JSON + Images Folder)
+          ⚡ Bulk Import (JSON + Images / ZIP)
+        </button>
+        <button
+          type="button"
+          className={`admin-tab-btn pending-tab ${activeTab === "pending" ? "active" : ""}`}
+          onClick={() => setActiveTab("pending")}
+        >
+          ⏳ Pending Items ({pendingProducts.length})
+          {pendingProducts.length > 0 && (
+            <span className="tab-pending-badge">{pendingProducts.length}</span>
+          )}
         </button>
       </div>
 
@@ -2079,22 +2476,52 @@ function Admin() {
           </div>
           <p>{message}</p>
         </form>
+      ) : activeTab === "bulk" ? (
+        <BulkUploader
+          onComplete={async (targetTab) => {
+            await load(targetTab || "pending");
+          }}
+        />
       ) : (
-        <BulkUploader onComplete={load} onStartAutofillQueue={startAutofillQueue} />
+        <PendingReviewList
+          products={products}
+          onRefresh={load}
+          onEditFull={(item) => {
+            edit(item);
+            setActiveTab("single");
+          }}
+          onDelete={remove}
+        />
       )}
 
-      {/* Category Management Overview */}
+      {/* Category Management Overview (Excludes Pending items) */}
       <div className="admin-category-panel">
         <h2>Categories Overview</h2>
         <div className="category-badges">
-          {Array.from(new Set(products.map((p) => p.collection))).map((cat) => {
-            const count = products.filter((p) => p.collection === cat).length;
-            const isSelected = adminCategoryFilter === cat;
+          {pendingProducts.length > 0 && (
+            <div
+              className={`category-badge pending-category-badge clickable ${activeTab === "pending" ? "active" : ""}`}
+              onClick={() => {
+                setActiveTab("pending");
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+              title="Click to view and complete pending dresses"
+            >
+              <span className="cat-name">⏳ PENDINGS</span>
+              <span className="cat-count pending-count-pill">{pendingProducts.length}</span>
+            </div>
+          )}
+          {Array.from(new Set(liveProducts.map((p) => p.collection))).filter(Boolean).map((cat) => {
+            const count = liveProducts.filter((p) => p.collection === cat).length;
+            const isSelected = activeTab !== "pending" && adminCategoryFilter === cat;
             return (
               <div
                 key={cat}
                 className={`category-badge clickable ${isSelected ? "active" : ""}`}
-                onClick={() => setAdminCategoryFilter(isSelected ? "ALL" : cat)}
+                onClick={() => {
+                  if (activeTab === "pending") setActiveTab("single");
+                  setAdminCategoryFilter(adminCategoryFilter === cat ? "ALL" : cat);
+                }}
                 title={`Click to filter by ${cat}`}
               >
                 <span className="cat-name">{cat}</span>
@@ -2113,7 +2540,7 @@ function Admin() {
         <button
           type="button"
           className="button excel-export-btn"
-          onClick={() => exportInventoryToExcel(products)}
+          onClick={() => exportInventoryToExcel(liveProducts)}
         >
           📊 Export Excel (.xls)
         </button>
@@ -2130,36 +2557,48 @@ function Admin() {
               className={`filter-pill-btn ${adminStatusFilter === "ALL" ? "active" : ""}`}
               onClick={() => setAdminStatusFilter("ALL")}
             >
-              All Items ({products.length})
+              All Live Items ({liveProducts.length})
             </button>
             <button
               type="button"
               className={`filter-pill-btn status-enabled ${adminStatusFilter === "ENABLED" ? "active" : ""}`}
               onClick={() => setAdminStatusFilter("ENABLED")}
             >
-              ● Active ({products.filter((p) => p.published).length})
+              ● Active ({liveProducts.filter((p) => p.published).length})
             </button>
             <button
               type="button"
               className={`filter-pill-btn status-disabled ${adminStatusFilter === "DISABLED" ? "active" : ""}`}
               onClick={() => setAdminStatusFilter("DISABLED")}
             >
-              ○ Disabled ({products.filter((p) => !p.published).length})
+              ○ Disabled ({liveProducts.filter((p) => !p.published).length})
             </button>
             <button
               type="button"
               className={`filter-pill-btn status-soldout ${adminStatusFilter === "SOLDOUT" ? "active" : ""}`}
               onClick={() => setAdminStatusFilter("SOLDOUT")}
             >
-              🔴 Sold Out ({products.filter((p) => Object.values(p.stock || {}).reduce((s, q) => s + (Number(q) || 0), 0) <= 0).length})
+              🔴 Sold Out ({liveProducts.filter((p) => Object.values(p.stock || {}).reduce((s, q) => s + (Number(q) || 0), 0) <= 0).length})
             </button>
             <button
               type="button"
               className={`filter-pill-btn status-soldhistory ${adminStatusFilter === "SOLD_ITEMS" ? "active" : ""}`}
               onClick={() => setAdminStatusFilter("SOLD_ITEMS")}
             >
-              💰 Sold ({products.filter((p) => (Number(p.soldCount) || 0) > 0).length})
+              💰 Sold ({liveProducts.filter((p) => (Number(p.soldCount) || 0) > 0).length})
             </button>
+            {pendingProducts.length > 0 && (
+              <button
+                type="button"
+                className="filter-pill-btn status-pending-pill"
+                onClick={() => {
+                  setActiveTab("pending");
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+              >
+                ⏳ Pendings ({pendingProducts.length})
+              </button>
+            )}
           </div>
         </div>
 
@@ -2172,10 +2611,10 @@ function Admin() {
               className={`filter-pill-btn ${adminCategoryFilter === "ALL" ? "active" : ""}`}
               onClick={() => setAdminCategoryFilter("ALL")}
             >
-              All Types ({products.length})
+              All Types ({liveProducts.length})
             </button>
-            {Array.from(new Set(products.map((p) => p.collection))).filter(Boolean).map((cat) => {
-              const count = products.filter((p) => p.collection === cat).length;
+            {Array.from(new Set(liveProducts.map((p) => p.collection))).filter(Boolean).map((cat) => {
+              const count = liveProducts.filter((p) => p.collection === cat).length;
               return (
                 <button
                   key={cat}
@@ -2215,7 +2654,7 @@ function Admin() {
           <div className="admin-filter-status-summary">
             <span>
               Showing <b>{
-                products.filter((p) => {
+                liveProducts.filter((p) => {
                   const totalStock = Object.values(p.stock || {}).reduce((sum, qty) => sum + (Number(qty) || 0), 0);
                   const soldCount = Number(p.soldCount) || 0;
                   if (adminStatusFilter === "ENABLED" && !p.published) return false;
@@ -2230,7 +2669,7 @@ function Admin() {
                   }
                   return true;
                 }).length
-              }</b> of <b>{products.length}</b> products
+              }</b> of <b>{liveProducts.length}</b> live products
             </span>
             {(adminStatusFilter !== "ALL" || adminCategoryFilter !== "ALL" || adminSearch) && (
               <button
@@ -2251,7 +2690,7 @@ function Admin() {
 
       <div className="inventory">
         {(() => {
-          const filtered = products.filter((p) => {
+          const filtered = liveProducts.filter((p) => {
             const totalStock = Object.values(p.stock || {}).reduce((sum, qty) => sum + (Number(qty) || 0), 0);
             const soldCount = Number(p.soldCount) || 0;
             if (adminStatusFilter === "ENABLED" && !p.published) return false;

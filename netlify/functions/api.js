@@ -40,9 +40,9 @@ export default async (request) => {
   }
   if (path === 'auth/logout' && method === 'POST') return json({ ok: true }, 200, { 'Set-Cookie': 'boutique_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0' })
   const catalogue = await products()
-  if (path === 'products' && method === 'GET') return json({ products: catalogue.filter((item) => item.published) })
+  if (path === 'products' && method === 'GET') return json({ products: catalogue.filter((item) => item.published && !item.pending && item.status !== 'PENDING') })
   if (path.startsWith('products/') && method === 'GET') {
-    const product = catalogue.find((item) => item.slug === path.split('/')[1] && item.published)
+    const product = catalogue.find((item) => item.slug === path.split('/')[1] && item.published && !item.pending && item.status !== 'PENDING')
     return product ? json({ product }) : json({ error: 'Dress not found.' }, 404)
   }
   // ── Public image serving ─────────────────────────────────────────────────────
@@ -99,6 +99,7 @@ export default async (request) => {
       return json({ error: 'Please complete all required dress details, enter Fixed Price, and add at least one image.' }, 400)
     }
     const primaryImage = imagesList[0]
+    const isPending = body?.pending !== undefined ? Boolean(body.pending) : (body?.status === 'PENDING')
     const product = {
       ...body,
       price: fixedPrice,
@@ -106,6 +107,9 @@ export default async (request) => {
       buyPrice,
       image: primaryImage,
       images: imagesList,
+      pending: isPending,
+      status: isPending ? 'PENDING' : (body?.status || 'ACTIVE'),
+      published: isPending ? false : (body?.published !== undefined ? Boolean(body.published) : true),
       soldCount: Number.isFinite(Number(body?.soldCount)) ? Number(body.soldCount) : 0,
       totalSoldRevenue: Number.isFinite(Number(body?.totalSoldRevenue)) ? Number(body.totalSoldRevenue) : 0,
       sales: Array.isArray(body?.sales) ? body.sales : [],
@@ -162,6 +166,8 @@ export default async (request) => {
         ? p.colours
         : (typeof p.colours === 'string' ? p.colours.split(',').map((c) => c.trim()).filter(Boolean) : [])
 
+      const isPending = p.pending !== undefined ? Boolean(p.pending) : (p.status === 'PENDING')
+
       const newProduct = {
         id: p.id || crypto.randomUUID(),
         name: p.name || 'Untitled Dress',
@@ -170,13 +176,15 @@ export default async (request) => {
         fixedPrice,
         buyPrice,
         description: p.description || '',
-        sizes: sizesList.length ? sizesList : ['Free Size'],
+        sizes: isPending ? (Array.isArray(p.sizes) ? p.sizes : []) : (sizesList.length ? sizesList : ['Free Size']),
         colours: coloursList,
         stock: parsedStock,
         image: imagesList[0] || '',
         images: imagesList,
         featured: Boolean(p.featured),
-        published: p.published !== undefined ? Boolean(p.published) : true,
+        pending: isPending,
+        status: isPending ? 'PENDING' : (p.status || 'ACTIVE'),
+        published: isPending ? false : (p.published !== undefined ? Boolean(p.published) : true),
         soldCount: Number(p.soldCount) || 0,
         totalSoldRevenue: Number(p.totalSoldRevenue) || 0,
         sales: Array.isArray(p.sales) ? p.sales : [],
