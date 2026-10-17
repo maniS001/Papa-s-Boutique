@@ -1279,12 +1279,17 @@ function BulkUploader({ onComplete }) {
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [zipLoading, setZipLoading] = useState(false);
 
-  // Hugging Face Direct AI state
-  const [hfToken, setHfToken] = useState(() => localStorage.getItem("papas_hf_token") || "");
+  // AI Vision Direct import state (Supports Hugging Face & Google Gemini)
+  const [aiToken, setAiToken] = useState(() => localStorage.getItem("papas_ai_token") || localStorage.getItem("papas_hf_token") || "");
+  const [aiProvider, setAiProvider] = useState(() => {
+    const saved = localStorage.getItem("papas_ai_token") || localStorage.getItem("papas_hf_token") || "";
+    return saved.startsWith("AIza") ? "gemini" : "hf";
+  });
+  const [aiModel, setAiModel] = useState("Qwen/Qwen2.5-VL-72B-Instruct");
   const [showTokenInput, setShowTokenInput] = useState(false);
-  const [hfModel, setHfModel] = useState("Qwen/Qwen2.5-VL-72B-Instruct");
-  const [hfGrouping, setHfGrouping] = useState("separate"); // "separate" (each photo is a dress) | "group" (multi-photo)
   const [tokenSavedNotice, setTokenSavedNotice] = useState(false);
+  const [testingToken, setTestingToken] = useState(false);
+  const [tokenTestStatus, setTokenTestStatus] = useState(null);
 
   const folderInputRef = React.useRef(null);
   const zipInputRef = React.useRef(null);
@@ -1349,177 +1354,124 @@ function BulkUploader({ onComplete }) {
     }
   };
 
-  const saveHfToken = () => {
-    const clean = hfToken.trim();
-    localStorage.setItem("papas_hf_token", clean);
+  const saveAiToken = () => {
+    const clean = aiToken.trim().replace(/^Bearer\s+/i, "").replace(/^['"]|['"]$/g, "");
+    localStorage.setItem("papas_ai_token", clean);
+    if (aiProvider === "hf") localStorage.setItem("papas_hf_token", clean);
     setTokenSavedNotice(true);
     setTimeout(() => setTokenSavedNotice(false), 2500);
   };
 
-  const handleDirectHfAnalyze = async () => {
+  const testAiToken = async () => {
+    const clean = aiToken.trim().replace(/^Bearer\s+/i, "").replace(/^['"]|['"]$/g, "");
+    if (!clean) {
+      setTokenTestStatus({ ok: false, error: "Please enter an API token first." });
+      return;
+    }
+    setTestingToken(true);
+    setTokenTestStatus(null);
+    try {
+      const res = await api("admin/ai/verify-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: clean, provider: aiProvider }),
+      });
+      if (res.ok) {
+        setTokenTestStatus({ ok: true, message: res.message || "Connected successfully!" });
+      } else {
+        setTokenTestStatus({ ok: false, error: res.error || "Token verification failed." });
+      }
+    } catch (err) {
+      setTokenTestStatus({ ok: false, error: err.message || "Failed to reach server to test token." });
+    } finally {
+      setTestingToken(false);
+    }
+  };
+
+  const handleDirectAiAnalyze = async () => {
     const uniqueFiles = Array.from(new Set(Array.from(imageFiles.values())));
     if (!uniqueFiles.length) {
       alert("Please select photos first using Step 1 (Folder, ZIP file, or Photos).");
       return;
     }
-    const cleanToken = hfToken.trim();
+    const cleanToken = aiToken.trim().replace(/^Bearer\s+/i, "").replace(/^['"]|['"]$/g, "");
     if (!cleanToken) {
-      alert("⚠️ Hugging Face API Token is required.\n\nPlease enter your token in the Hugging Face AI Settings box below. You can get a free token from huggingface.co/settings/tokens.");
+      alert("⚠️ API Token is required.\n\nPlease enter your API token in the AI Configuration box below.");
       return;
     }
-    localStorage.setItem("papas_hf_token", cleanToken);
+    localStorage.setItem("papas_ai_token", cleanToken);
+    if (aiProvider === "hf") localStorage.setItem("papas_hf_token", cleanToken);
 
     setUploading(true);
     setUploadProgress({ current: 0, total: uniqueFiles.length });
-    const preparedProducts = [];
 
     try {
-      if (hfGrouping === "separate") {
-        // Every photo is an independent dress (prevents unwanted grouping)
-        for (let i = 0; i < uniqueFiles.length; i++) {
-          const file = uniqueFiles[i];
-          setUploadStatus(`Photo ${i + 1} of ${uniqueFiles.length}: Uploading "${file.name}" to boutique storage...`);
-          setUploadProgress({ current: i + 1, total: uniqueFiles.length });
+      // 1. Upload photos to boutique storage and generate optimized base64
+      const items = [];
+      for (let i = 0; i < uniqueFiles.length; i++) {
+        const file = uniqueFiles[i];
+        setUploadStatus(`Photo ${i + 1} of ${uniqueFiles.length}: Uploading "${file.name}" to boutique storage...`);
+        setUploadProgress({ current: i + 1, total: uniqueFiles.length });
 
-          // 1. Upload original photo
-          const formData = new FormData();
-          formData.append("image", file);
-          const uploadRes = await fetch("/api/admin/upload", {
-            method: "POST",
-            body: formData,
-          });
-          const uploadData = await uploadRes.json();
-          if (!uploadRes.ok) {
-            throw new Error(`Upload error for "${file.name}": ${uploadData.error || "Failed"}`);
-          }
-          const photoUrl = uploadData.url;
-
-          // 2. Generate optimized base64 for Hugging Face vision API
-          setUploadStatus(`Photo ${i + 1} of ${uniqueFiles.length}: Hugging Face AI analyzing "${file.name}"...`);
-          const base64Data = await fileToBase64(file);
-
-          let aiProduct = null;
-          try {
-            const aiRes = await api("admin/ai/analyze-image", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                imageBase64: base64Data,
-                mimeType: file.type || "image/jpeg",
-                model: hfModel,
-                hfToken: cleanToken,
-              }),
-            });
-            if (aiRes?.product) {
-              aiProduct = aiRes.product;
-            }
-          } catch (aiErr) {
-            console.warn(`Hugging Face AI notice for ${file.name}:`, aiErr.message);
-            if (i === 0 && (aiErr.message.includes("401") || aiErr.message.includes("token") || aiErr.message.includes("403"))) {
-              throw new Error(`Hugging Face API Authentication Error: ${aiErr.message}\nPlease check your token at huggingface.co/settings/tokens.`);
-            }
-          }
-
-          const rawColours = aiProduct?.colours
-            ? (Array.isArray(aiProduct.colours) ? aiProduct.colours : [aiProduct.colours])
-            : [];
-
-          preparedProducts.push({
-            name: aiProduct?.name || `Dress ${i + 1} (${file.name.replace(/\.[^.]+$/, "")})`,
-            collection: aiProduct?.collection || "Kurtis",
-            description: aiProduct?.description || "Elegant boutique dress with fine fabric and attractive craftsmanship.",
-            colours: rawColours,
-            colorVariants: rawColours.length > 0 ? [{ colour: rawColours[0], images: [photoUrl] }] : [],
-            images: [photoUrl],
-            image: photoUrl,
-            buyPrice: "",
-            fixedPrice: "",
-            price: 0,
-            sizes: [],
-            stock: {},
-            pending: true,
-            status: "PENDING",
-            published: false,
-          });
-        }
-      } else {
-        // Group all photos together under 1 dress
-        setUploadStatus(`Uploading all ${uniqueFiles.length} photos...`);
-        const photoUrls = [];
-        for (let i = 0; i < uniqueFiles.length; i++) {
-          const file = uniqueFiles[i];
-          setUploadProgress({ current: i + 1, total: uniqueFiles.length });
-          const formData = new FormData();
-          formData.append("image", file);
-          const uploadRes = await fetch("/api/admin/upload", {
-            method: "POST",
-            body: formData,
-          });
-          const uploadData = await uploadRes.json();
-          if (!uploadRes.ok) throw new Error(`Upload error: ${uploadData.error}`);
-          photoUrls.push(uploadData.url);
+        const formData = new FormData();
+        formData.append("image", file);
+        const uploadRes = await fetch("/api/admin/upload", {
+          method: "POST",
+          body: formData,
+        });
+        const uploadData = await uploadRes.json();
+        if (!uploadRes.ok) {
+          throw new Error(`Upload error for "${file.name}": ${uploadData.error || "Failed"}`);
         }
 
-        setUploadStatus(`Hugging Face AI analyzing dress style from primary photo...`);
-        const primaryFile = uniqueFiles[0];
-        const base64Data = await fileToBase64(primaryFile);
-
-        let aiProduct = null;
-        try {
-          const aiRes = await api("admin/ai/analyze-image", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              imageBase64: base64Data,
-              mimeType: primaryFile.type || "image/jpeg",
-              model: hfModel,
-              hfToken: cleanToken,
-            }),
-          });
-          if (aiRes?.product) aiProduct = aiRes.product;
-        } catch (aiErr) {
-          console.warn("AI analyze notice:", aiErr.message);
-        }
-
-        const rawColours = aiProduct?.colours
-          ? (Array.isArray(aiProduct.colours) ? aiProduct.colours : [aiProduct.colours])
-          : [];
-
-        preparedProducts.push({
-          name: aiProduct?.name || "Boutique Dress",
-          collection: aiProduct?.collection || "Kurtis",
-          description: aiProduct?.description || "Beautiful boutique dress crafted for special occasions and effortless everyday style.",
-          colours: rawColours,
-          colorVariants: [],
-          images: photoUrls,
-          image: photoUrls[0] || "",
-          buyPrice: "",
-          fixedPrice: "",
-          price: 0,
-          sizes: [],
-          stock: {},
-          pending: true,
-          status: "PENDING",
-          published: false,
+        const base64Data = await fileToBase64(file);
+        items.push({
+          name: file.name,
+          url: uploadData.url,
+          base64: base64Data,
+          mimeType: file.type || "image/jpeg",
         });
       }
 
-      setUploadStatus("Saving dresses into Pending Review category...");
+      // 2. Call batch-analyze endpoint for automated smart grouping
+      setUploadStatus(`🤖 AI Vision analyzing ${items.length} photos & grouping poses vs colors vs designs...`);
+      const batchRes = await fetch("/api/admin/ai/batch-analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: aiProvider,
+          token: cleanToken,
+          model: aiModel,
+          items: items,
+        }),
+      });
+      const batchData = await batchRes.json();
+      if (!batchRes.ok) {
+        throw new Error(batchData.error || "AI batch analysis failed.");
+      }
+
+      const productsToSave = Array.isArray(batchData.products) ? batchData.products : [];
+      if (!productsToSave.length) {
+        throw new Error("AI did not generate any valid product entries.");
+      }
+
+      // 3. Save products in bulk directly into the Pendings category
+      setUploadStatus(`Saving ${productsToSave.length} dresses into Pending Review category...`);
       const bulkRes = await fetch("/api/admin/products/bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ products: preparedProducts }),
+        body: JSON.stringify({ products: productsToSave }),
       });
       const bulkData = await bulkRes.json();
       if (!bulkRes.ok) throw new Error(bulkData.error || "Failed to save products in bulk.");
 
-      alert(`🎉 Successfully analyzed and imported ${preparedProducts.length} dresses directly into your Pendings list!`);
+      alert(`🎉 Successfully analyzed and grouped your photos into ${productsToSave.length} dresses directly in your Pendings list!`);
 
       if (onComplete) {
         await onComplete("pending");
       }
     } catch (err) {
-      alert("AI Import Notice: " + err.message);
+      alert("AI Vision Notice: " + err.message);
     } finally {
       setUploading(false);
     }
@@ -1715,7 +1667,7 @@ function BulkUploader({ onComplete }) {
           className={`bulk-method-btn ${bulkMethod === "hf" ? "active" : ""}`}
           onClick={() => setBulkMethod("hf")}
         >
-          ✨ Auto-Analyze with Hugging Face AI (Direct / No JSON)
+          ✨ Auto-Analyze with AI Vision (Direct / No JSON)
           <span className="badge-new-addon">Add-on</span>
         </button>
         <button
@@ -1731,12 +1683,12 @@ function BulkUploader({ onComplete }) {
         <div>
           <h2>
             {bulkMethod === "hf"
-              ? "✨ Direct Hugging Face AI Vision Import"
+              ? "✨ Direct AI Vision Import & Auto-Grouping"
               : "⚡ Bulk Import to Pendings via JSON"}
           </h2>
           <p className="bulk-desc">
             {bulkMethod === "hf"
-              ? "Select your dress photos (folder, ZIP, or gallery). Hugging Face Vision AI will automatically inspect the photos and generate dress names, categories, descriptions & colors directly into your Pendings list!"
+              ? "Select your dress photos (folder, ZIP, or gallery). AI Vision will automatically inspect photos, group multi-angle poses and color variants, and save directly into your Pendings list!"
               : "Load photos (Folder, ZIP, or Gallery) & AI-generated JSON. Photos will be uploaded and dresses will be saved under the Pendings Category for you to complete prices and sizes."}
           </p>
         </div>
@@ -1887,39 +1839,121 @@ function BulkUploader({ onComplete }) {
         )}
       </div>
 
-      {/* METHOD A: Hugging Face AI Direct Analysis */}
+      {/* METHOD A: AI Vision Direct Analysis */}
       {bulkMethod === "hf" && (
         <div className="bulk-step-box hf-step-box">
           <div className="bulk-step-title">
             <span className="step-num">2</span>
             <div>
-              <h3>Hugging Face Vision AI Configuration</h3>
-              <p>Configure model settings and your free Hugging Face API token.</p>
+              <h3>AI Vision Configuration &amp; Auto-Grouping</h3>
+              <p>Configure your free AI Vision token (Hugging Face or Google Gemini) to auto-analyze and group dress photos.</p>
             </div>
           </div>
 
           <div className="hf-config-grid">
             <div className="hf-config-col">
               <label className="hf-label">
-                Hugging Face API Token <span className="mandatory-star">*</span>
+                AI Vision Provider
+                <span className="helper-txt">Choose which AI service analyzes your photos</span>
+              </label>
+              <select
+                className="hf-model-select"
+                value={aiProvider}
+                onChange={(e) => {
+                  const p = e.target.value;
+                  setAiProvider(p);
+                  setTokenTestStatus(null);
+                  if (p === "gemini") setAiModel("gemini-1.5-flash");
+                  else setAiModel("Qwen/Qwen2.5-VL-72B-Instruct");
+                }}
+              >
+                <option value="hf">🤗 Hugging Face (Qwen2.5-VL / Llama-3.2)</option>
+                <option value="gemini">✨ Google Gemini Vision (gemini-1.5-flash)</option>
+              </select>
+            </div>
+
+            <div className="hf-config-col">
+              <label className="hf-label">
+                Vision AI Model
+                <span className="helper-txt">Multimodal model used for cataloguing</span>
+              </label>
+              <select
+                className="hf-model-select"
+                value={aiModel}
+                onChange={(e) => setAiModel(e.target.value)}
+              >
+                {aiProvider === "hf" ? (
+                  <>
+                    <option value="Qwen/Qwen2.5-VL-72B-Instruct">
+                      Qwen/Qwen2.5-VL-72B-Instruct (Recommended - Best Accuracy)
+                    </option>
+                    <option value="meta-llama/Llama-3.2-11B-Vision-Instruct">
+                      meta-llama/Llama-3.2-11B-Vision-Instruct (Meta Llama 3.2 Vision)
+                    </option>
+                  </>
+                ) : (
+                  <>
+                    <option value="gemini-1.5-flash">
+                      Gemini 1.5 Flash (Ultra Fast &amp; High Accuracy - Free)
+                    </option>
+                    <option value="gemini-1.5-pro">
+                      Gemini 1.5 Pro (Deep Reasoning)
+                    </option>
+                  </>
+                )}
+              </select>
+            </div>
+
+            <div className="hf-config-col token-col-full">
+              <label className="hf-label">
+                {aiProvider === "hf" ? "Hugging Face API Access Token" : "Google Gemini API Key"}{" "}
+                <span className="mandatory-star">*</span>
                 <span className="helper-txt">
-                  Free access token from{" "}
-                  <a
-                    href="https://huggingface.co/settings/tokens"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="hf-external-link"
-                  >
-                    huggingface.co/settings/tokens ↗
-                  </a>
+                  {aiProvider === "hf" ? (
+                    <>
+                      Free token from{" "}
+                      <a
+                        href="https://huggingface.co/settings/tokens"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="hf-external-link"
+                      >
+                        huggingface.co/settings/tokens ↗
+                      </a>{" "}
+                      (Role: <b>Read</b> or check <i>"Make calls to the serverless Inference API"</i>)
+                    </>
+                  ) : (
+                    <>
+                      Free API key from{" "}
+                      <a
+                        href="https://aistudio.google.com/app/apikey"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="hf-external-link"
+                      >
+                        Google AI Studio ↗
+                      </a>
+                    </>
+                  )}
                 </span>
               </label>
               <div className="hf-token-input-row">
                 <input
                   type={showTokenInput ? "text" : "password"}
-                  placeholder="hf_..."
-                  value={hfToken}
-                  onChange={(e) => setHfToken(e.target.value)}
+                  placeholder={aiProvider === "hf" ? "hf_..." : "AIzaSy..."}
+                  value={aiToken}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setAiToken(val);
+                    setTokenTestStatus(null);
+                    if (val.trim().startsWith("AIza") && aiProvider !== "gemini") {
+                      setAiProvider("gemini");
+                      setAiModel("gemini-1.5-flash");
+                    } else if (val.trim().startsWith("hf_") && aiProvider !== "hf") {
+                      setAiProvider("hf");
+                      setAiModel("Qwen/Qwen2.5-VL-72B-Instruct");
+                    }
+                  }}
                   className="hf-token-input"
                 />
                 <button
@@ -1931,64 +1965,43 @@ function BulkUploader({ onComplete }) {
                 </button>
                 <button
                   type="button"
+                  className="button-secondary test-token-btn"
+                  disabled={testingToken || !aiToken.trim()}
+                  onClick={testAiToken}
+                  title="Verify that your token is valid and active"
+                >
+                  {testingToken ? "⏳ Testing..." : "🔍 Test Token"}
+                </button>
+                <button
+                  type="button"
                   className="button-secondary save-token-btn"
-                  onClick={saveHfToken}
+                  onClick={saveAiToken}
                 >
                   {tokenSavedNotice ? "✓ Saved!" : "Save Token"}
                 </button>
               </div>
-            </div>
 
-            <div className="hf-config-col">
-              <label className="hf-label">
-                Vision AI Model
-                <span className="helper-txt">Selected Hugging Face multimodal vision model</span>
-              </label>
-              <select
-                className="hf-model-select"
-                value={hfModel}
-                onChange={(e) => setHfModel(e.target.value)}
-              >
-                <option value="Qwen/Qwen2.5-VL-72B-Instruct">
-                  Qwen/Qwen2.5-VL-72B-Instruct (Recommended - Best Accuracy)
-                </option>
-                <option value="meta-llama/Llama-3.2-11B-Vision-Instruct">
-                  meta-llama/Llama-3.2-11B-Vision-Instruct (Meta Llama 3.2 Vision)
-                </option>
-              </select>
+              {tokenTestStatus && (
+                <div
+                  className={`token-test-result ${tokenTestStatus.ok ? "success" : "error"}`}
+                >
+                  {tokenTestStatus.ok
+                    ? `✅ ${tokenTestStatus.message}`
+                    : `⚠️ ${tokenTestStatus.error}`}
+                </div>
+              )}
             </div>
           </div>
 
-          <div className="hf-grouping-selector">
-            <span className="hf-grouping-title">Dress Photo Grouping:</span>
-            <div className="hf-radio-group">
-              <label className={`hf-radio-card ${hfGrouping === "separate" ? "active" : ""}`}>
-                <input
-                  type="radio"
-                  name="hfGrouping"
-                  value="separate"
-                  checked={hfGrouping === "separate"}
-                  onChange={() => setHfGrouping("separate")}
-                />
-                <div className="hf-radio-content">
-                  <b>👗 Each photo is a separate dress (Independent designs)</b>
-                  <p>Guarantees dresses are never merged together. Perfect when you upload photos of different dresses.</p>
-                </div>
-              </label>
-
-              <label className={`hf-radio-card ${hfGrouping === "group" ? "active" : ""}`}>
-                <input
-                  type="radio"
-                  name="hfGrouping"
-                  value="group"
-                  checked={hfGrouping === "group"}
-                  onChange={() => setHfGrouping("group")}
-                />
-                <div className="hf-radio-content">
-                  <b>📸 All selected photos belong to 1 single dress</b>
-                  <p>Front, back, and detail photos of the exact same garment will be grouped into 1 product.</p>
-                </div>
-              </label>
+          <div className="hf-auto-group-banner">
+            <span className="hf-auto-group-icon">✨</span>
+            <div className="hf-auto-group-text">
+              <h4>100% Automated Dress Grouping:</h4>
+              <p>
+                • <b>Multiple poses of 1 dress (same color):</b> Automatically grouped into 1 product with 1 single price entry.<br />
+                • <b>Same dress in multiple colors:</b> Grouped under the same name with per-color variant stock in Pendings.<br />
+                • <b>Different dress designs:</b> Kept strictly separate as independent products.
+              </p>
             </div>
           </div>
 
@@ -1997,14 +2010,14 @@ function BulkUploader({ onComplete }) {
               type="button"
               className="button hf-analyze-start-btn"
               disabled={uploading || uniqueFilesCount === 0}
-              onClick={handleDirectHfAnalyze}
+              onClick={handleDirectAiAnalyze}
             >
               {uploading
-                ? "⏳ Analyzing with Hugging Face AI & Saving..."
+                ? "⏳ Analyzing with AI Vision & Saving..."
                 : `🚀 Auto-Analyze & Save to Pendings (${uniqueFilesCount} ${uniqueFilesCount === 1 ? "photo" : "photos"})`}
             </button>
             <p className="hf-btn-note">
-              No JSON needed! Hugging Face AI inspects each photo, extracts dress details, and saves directly into the Pendings category.
+              No JSON needed! AI Vision inspects each photo, detects poses and colors, and saves directly into the Pendings category.
             </p>
           </div>
 
@@ -2333,6 +2346,7 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
       const first = variants[0];
       const primaryBuyPrice = Number(first.buyPrice);
       const primaryFixedPrice = Number(first.fixedPrice);
+      const isMultiColor = variants.length > 1;
 
       const payload = {
         ...product,
@@ -2341,13 +2355,17 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
         price: primaryFixedPrice,
         sizes: Array.from(allSizesSet),
         stock: consolidatedStock,
-        colours: variants.map((v) => v.colour),
-        colorVariants: variants.map((v) => ({
-          ...v,
-          buyPrice: Number(v.buyPrice),
-          fixedPrice: Number(v.fixedPrice),
-          price: Number(v.fixedPrice),
-        })),
+        colours: isMultiColor
+          ? variants.map((v) => v.colour)
+          : (first.colour && first.colour !== "Standard" ? [first.colour] : (rawColours.length ? rawColours : [])),
+        colorVariants: isMultiColor
+          ? variants.map((v) => ({
+              ...v,
+              buyPrice: Number(v.buyPrice),
+              fixedPrice: Number(v.fixedPrice),
+              price: Number(v.fixedPrice),
+            }))
+          : [],
         pending: false,
         status: "ACTIVE",
         published: true,
@@ -2414,10 +2432,16 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
           <div className="pending-badges-row">
             <span className="badge-pending-tag">⏳ PENDING REVIEW</span>
             <span className="tag-category">{product.collection || "Kurtis"}</span>
-            {variants.length > 0 && (
+            {variants.length > 1 ? (
               <span className="pending-colour-badge">
                 🎨 {variants.map((v) => v.colour).join(" · ")}
               </span>
+            ) : (
+              variants[0]?.colour && variants[0].colour !== "Standard" && (
+                <span className="pending-colour-badge">
+                  🎨 {variants[0].colour}
+                </span>
+              )
             )}
             <span className="pending-photos-count-badge">
               📸 {imagesList.length} {imagesList.length === 1 ? "photo" : "photos"}
@@ -2448,121 +2472,183 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
       </div>
 
       <div className="pending-card-body">
-        {/* Color Variants Toolbar & Section */}
-        <div className="variants-section-header">
-          <div className="variants-title-wrap">
-            <h4 className="variants-title">
-              👗 Dress Variants &amp; Pricing ({variants.length} {variants.length === 1 ? "Color" : "Colors"}):
-            </h4>
-            <span className="variants-subtitle">
-              Enter Buy Price, Fixed Price, and pick Sizes for each dress color.
-            </span>
-          </div>
-          <div className="variants-toolbar-actions">
-            {variants.length > 1 && (
-              <button
-                type="button"
-                className="button-secondary apply-all-btn"
-                onClick={handleApplyToAllVariants}
-                title="Copies price, sizes, and quantities from Color 1 to all other colors"
-              >
-                ⚡ Use Details for All Colors
-              </button>
+        {variants.length > 1 ? (
+          <>
+            {/* Multi-Color Variants Toolbar & Section */}
+            <div className="variants-section-header">
+              <div className="variants-title-wrap">
+                <h4 className="variants-title">
+                  👗 Dress Variants &amp; Pricing ({variants.length} Colors):
+                </h4>
+                <span className="variants-subtitle">
+                  Enter Buy Price, Fixed Price, and pick Sizes for each dress color.
+                </span>
+              </div>
+              <div className="variants-toolbar-actions">
+                <button
+                  type="button"
+                  className="button-secondary apply-all-btn"
+                  onClick={handleApplyToAllVariants}
+                  title="Copies price, sizes, and quantities from Color 1 to all other colors"
+                >
+                  ⚡ Use Details for All Colors
+                </button>
+                <button
+                  type="button"
+                  className="text-button add-variant-btn"
+                  onClick={handleAddVariant}
+                >
+                  + Add Color Variant
+                </button>
+              </div>
+            </div>
+
+            {copiedNotice && (
+              <div className="apply-all-alert">
+                ✓ Copied Buy Price, Fixed Price, Sizes, and Stock from <b>"{variants[0].colour}"</b> to all other colors!
+              </div>
             )}
-            <button
-              type="button"
-              className="text-button add-variant-btn"
-              onClick={handleAddVariant}
-            >
-              + Add Color Variant
-            </button>
-          </div>
-        </div>
 
-        {copiedNotice && (
-          <div className="apply-all-alert">
-            ✓ Copied Buy Price, Fixed Price, Sizes, and Stock from <b>"{variants[0].colour}"</b> to all other colors!
-          </div>
-        )}
+            {/* Variants List */}
+            <div className="variants-cards-container">
+              {variants.map((variant, idx) => (
+                <div key={idx} className="variant-editor-card">
+                  <div className="variant-card-top">
+                    <div className="variant-label-row">
+                      <span className="variant-pill-tag">Color #{idx + 1}</span>
+                      <input
+                        type="text"
+                        className="variant-name-input"
+                        value={variant.colour}
+                        onChange={(e) => handleUpdateVariant(idx, "colour", e.target.value)}
+                        placeholder="e.g. Ruby Red, Mustard Yellow..."
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="text-button remove-variant-btn"
+                      onClick={() => handleRemoveVariant(idx)}
+                      title="Remove this color variant"
+                    >
+                      ✕ Remove Color
+                    </button>
+                  </div>
 
-        {/* Variants List */}
-        <div className="variants-cards-container">
-          {variants.map((variant, idx) => (
-            <div key={idx} className="variant-editor-card">
-              <div className="variant-card-top">
-                <div className="variant-label-row">
-                  <span className="variant-pill-tag">Color #{idx + 1}</span>
-                  <input
-                    type="text"
-                    className="variant-name-input"
-                    value={variant.colour}
-                    onChange={(e) => handleUpdateVariant(idx, "colour", e.target.value)}
-                    placeholder="e.g. Ruby Red, Mustard Yellow..."
-                  />
+                  <div className="pending-fields-grid">
+                    <div className="pending-field-group">
+                      <label>
+                        Buy Price (₹) <span className="mandatory-star">*</span>
+                        <span className="helper-txt">(Cost price per unit - Mandatory)</span>
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="e.g. 1500"
+                        value={variant.buyPrice}
+                        onChange={(e) => handleUpdateVariant(idx, "buyPrice", e.target.value)}
+                      />
+                    </div>
+
+                    <div className="pending-field-group">
+                      <label>
+                        Fixed Price (₹) <span className="mandatory-star">*</span>
+                        <span className="helper-txt">(Selling / Retail price - Mandatory)</span>
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="e.g. 2990"
+                        value={variant.fixedPrice}
+                        onChange={(e) => handleUpdateVariant(idx, "fixedPrice", e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="pending-size-section">
+                    <div className="field-group-header">
+                      <span className="field-group-title">
+                        Available Sizes &amp; Stock Count for "{variant.colour}" <span className="mandatory-star">*</span>
+                      </span>
+                      <span className="field-group-subtitle">
+                        Click any size to select (defaults to 1 piece). Adjust quantities with + / - buttons.
+                      </span>
+                    </div>
+                    <SizeStockSelector
+                      selectedSizes={variant.sizes || []}
+                      stock={variant.stock || {}}
+                      onChange={(newSizes, newStock) => {
+                        handleUpdateVariant(idx, "sizes", newSizes);
+                        handleUpdateVariant(idx, "stock", newStock);
+                      }}
+                    />
+                  </div>
                 </div>
-                {variants.length > 1 && (
-                  <button
-                    type="button"
-                    className="text-button remove-variant-btn"
-                    onClick={() => handleRemoveVariant(idx)}
-                    title="Remove this color variant"
-                  >
-                    ✕ Remove Color
-                  </button>
-                )}
+              ))}
+            </div>
+          </>
+        ) : (
+          /* Single Dress Pricing & Stock (Only 1 price entry needed!) */
+          <div className="single-dress-editor">
+            <div className="pending-fields-grid">
+              <div className="pending-field-group">
+                <label>
+                  Buy Price (₹) <span className="mandatory-star">*</span>
+                  <span className="helper-txt">(Cost price per unit - Mandatory)</span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="e.g. 1500"
+                  value={variants[0].buyPrice}
+                  onChange={(e) => handleUpdateVariant(0, "buyPrice", e.target.value)}
+                />
               </div>
 
-              <div className="pending-fields-grid">
-                <div className="pending-field-group">
-                  <label>
-                    Buy Price (₹) <span className="mandatory-star">*</span>
-                    <span className="helper-txt">(Cost price per unit - Mandatory)</span>
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    placeholder="e.g. 1500"
-                    value={variant.buyPrice}
-                    onChange={(e) => handleUpdateVariant(idx, "buyPrice", e.target.value)}
-                  />
-                </div>
-
-                <div className="pending-field-group">
-                  <label>
-                    Fixed Price (₹) <span className="mandatory-star">*</span>
-                    <span className="helper-txt">(Selling / Retail price - Mandatory)</span>
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    placeholder="e.g. 2990"
-                    value={variant.fixedPrice}
-                    onChange={(e) => handleUpdateVariant(idx, "fixedPrice", e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="pending-size-section">
-                <div className="field-group-header">
-                  <span className="field-group-title">
-                    Available Sizes &amp; Stock Count for "{variant.colour}" <span className="mandatory-star">*</span>
-                  </span>
-                  <span className="field-group-subtitle">
-                    Click any size to select (defaults to 1 piece). Adjust quantities with + / - buttons.
-                  </span>
-                </div>
-                <SizeStockSelector
-                  selectedSizes={variant.sizes || []}
-                  stock={variant.stock || {}}
-                  onChange={(newSizes, newStock) => {
-                    handleUpdateVariant(idx, "sizes", newSizes);
-                    handleUpdateVariant(idx, "stock", newStock);
-                  }}
+              <div className="pending-field-group">
+                <label>
+                  Fixed Price (₹) <span className="mandatory-star">*</span>
+                  <span className="helper-txt">(Selling / Retail price - Mandatory)</span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="e.g. 2990"
+                  value={variants[0].fixedPrice}
+                  onChange={(e) => handleUpdateVariant(0, "fixedPrice", e.target.value)}
                 />
               </div>
             </div>
-          ))}
-        </div>
+
+            <div className="pending-size-section">
+              <div className="field-group-header">
+                <span className="field-group-title">
+                  Available Sizes &amp; Stock Count <span className="mandatory-star">*</span>
+                </span>
+                <span className="field-group-subtitle">
+                  Click any size to select (defaults to 1 piece). Adjust quantities with + / - buttons.
+                </span>
+              </div>
+              <SizeStockSelector
+                selectedSizes={variants[0].sizes || []}
+                stock={variants[0].stock || {}}
+                onChange={(newSizes, newStock) => {
+                  handleUpdateVariant(0, "sizes", newSizes);
+                  handleUpdateVariant(0, "stock", newStock);
+                }}
+              />
+            </div>
+
+            <div className="single-variant-footer-action">
+              <button
+                type="button"
+                className="text-button add-variant-btn"
+                onClick={handleAddVariant}
+              >
+                + Add Another Color Variant
+              </button>
+            </div>
+          </div>
+        )}
 
         {errorMsg && <p className="pending-error-banner">{errorMsg}</p>}
 

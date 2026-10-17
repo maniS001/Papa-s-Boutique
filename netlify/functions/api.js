@@ -292,13 +292,348 @@ export default async (request) => {
     await saveProducts(remaining)
     return json({ ok: true, discarded: discardedCount })
   }
-  // Hugging Face Direct Vision AI Image Analysis
+  // AI Token Verification Endpoint
+  if (path === 'admin/ai/verify-token' && method === 'POST') {
+    const body = await requestBody(request)
+    const rawToken = body?.token || body?.hfToken || process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN || process.env.GEMINI_API_KEY || ''
+    const cleanToken = rawToken.trim().replace(/^Bearer\s+/i, '').replace(/^['"]|['"]$/g, '')
+    const provider = body?.provider || (cleanToken.startsWith('AIza') ? 'gemini' : 'hf')
+
+    if (!cleanToken) {
+      return json({ ok: false, error: 'Token is empty. Please enter an API token.' }, 400)
+    }
+
+    try {
+      if (provider === 'gemini') {
+        const testRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanToken}`)
+        if (testRes.ok) {
+          return json({ ok: true, provider: 'gemini', message: 'Google Gemini Vision API is connected successfully!' })
+        }
+        const errText = await testRes.text()
+        return json({ ok: false, error: 'Invalid Google Gemini API Key. Please check your key at https://aistudio.google.com/app/apikey' }, 401)
+      } else {
+        const testRes = await fetch('https://huggingface.co/api/whoami-v2', {
+          headers: { 'Authorization': `Bearer ${cleanToken}` }
+        })
+        if (testRes.ok) {
+          const data = await testRes.json()
+          return json({ ok: true, provider: 'hf', username: data.name || data.fullname || 'Hugging Face User', message: `Connected as @${data.name || 'User'}!` })
+        }
+        return json({
+          ok: false,
+          error: 'Hugging Face rejected this token (401: Invalid username or password).\n\nHow to get a working token:\n1. Go to https://huggingface.co/settings/tokens\n2. Click "Create new token"\n3. Choose "Read" role (or if Fine-grained, check "Make calls to the serverless Inference API")\n4. Copy the token starting with "hf_..." and paste it here.\n(Do NOT use your personal account login password).'
+        }, 401)
+      }
+    } catch (err) {
+      return json({ ok: false, error: 'Could not reach API: ' + (err.message || String(err)) }, 500)
+    }
+  }
+
+  // Automatic Batch Analysis & Dress Grouping Endpoint
+  if (path === 'admin/ai/batch-analyze' && method === 'POST') {
+    const body = await requestBody(request)
+    const items = Array.isArray(body?.items) ? body.items : []
+    if (!items.length) {
+      return json({ error: 'No photos provided for batch analysis.' }, 400)
+    }
+
+    const rawToken = body?.token || body?.hfToken || process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN || process.env.GEMINI_API_KEY || ''
+    const cleanToken = rawToken.trim().replace(/^Bearer\s+/i, '').replace(/^['"]|['"]$/g, '')
+    const provider = body?.provider || (cleanToken.startsWith('AIza') ? 'gemini' : 'hf')
+    const model = body?.model || (provider === 'gemini' ? 'gemini-1.5-flash' : 'Qwen/Qwen2.5-VL-72B-Instruct')
+
+    if (!cleanToken) {
+      return json({ error: 'API token is required for auto-analysis.' }, 400)
+    }
+
+    try {
+      if (provider === 'gemini') {
+        // Multi-image batch grouping via Google Gemini Vision
+        const promptText = `You are an expert fashion inventory cataloguer for "PAPA'S BOUTIQUE".
+I am providing photos of boutique dresses. Each photo is numbered in order.
+Carefully examine and compare all photos to organize our store inventory according to these 3 STRICT RULES:
+
+1. MULTIPLE POSES OF THE SAME DRESS (ONE COLOR):
+   - If multiple photos show the EXACT SAME dress in the same color (e.g. front angle, back angle, model pose, detail shot):
+   - Group all these photos into ONE single product!
+   - "colours": ["Color Name"] (ONLY ONE color).
+   - "colorVariants": [] (empty array, because there are NO separate color variants).
+   - "imageIndices": list of the 1-based indices of these photos (e.g. [1, 2]).
+
+2. SAME DRESS DESIGN IN MULTIPLE COLORS:
+   - If photos show the EXACT SAME dress cut, neckline, fabric, and embroidery pattern, but in DIFFERENT colors (e.g. one in Maroon and one in Mustard):
+   - Group them into ONE single product with the same dress title and description!
+   - "colours": ["Maroon", "Mustard"].
+   - "colorVariants": [
+       { "colour": "Maroon", "imageIndices": [1] },
+       { "colour": "Mustard", "imageIndices": [2] }
+     ].
+   - "imageIndices": list of all photo indices for this dress.
+
+3. DIFFERENT DRESS DESIGNS:
+   - If dresses have DIFFERENT prints, DIFFERENT cuts, DIFFERENT necklines, or DIFFERENT fabrics:
+   - Strictly output as SEPARATE products! NEVER combine different dress styles.
+
+Return ONLY a valid JSON array of products:
+[
+  {
+    "name": "Attractive Product Title (e.g. Zari Embroidered Chanderi Kurti)",
+    "collection": "Category (Choose ONLY one: Kurtis, Leggings, Dupatta, Sarees, Occasion, Everyday Ease)",
+    "description": "2-3 attractive sentences describing the fabric, neckline, sleeves, embroidery, and styling tips.",
+    "colours": ["Color 1"],
+    "colorVariants": [],
+    "imageIndices": [1, 2]
+  }
+]`
+
+        const parts = [{ text: promptText }]
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i]
+          const cleanB64 = it.base64?.includes(',') ? it.base64.split(',')[1] : (it.base64 || '')
+          parts.push({ text: `\n[Photo ${i + 1}: ${it.name || 'image'}]` })
+          parts.push({
+            inline_data: {
+              mime_type: it.mimeType || 'image/jpeg',
+              data: cleanB64
+            }
+          })
+        }
+
+        const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanToken}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts }],
+            generationConfig: {
+              response_mime_type: 'application/json'
+            }
+          })
+        })
+
+        if (!geminiRes.ok) {
+          const errText = await geminiRes.text()
+          let parsedErr = errText
+          try { parsedErr = JSON.parse(errText).error?.message || errText } catch {}
+          throw new Error(`Gemini API error (${geminiRes.status}): ${parsedErr}`)
+        }
+
+        const geminiData = await geminiRes.json()
+        const rawContent = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || ''
+        const cleanJson = rawContent.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+        const parsedList = JSON.parse(cleanJson)
+
+        const finalProducts = (Array.isArray(parsedList) ? parsedList : [parsedList]).map((p) => {
+          const indices = Array.isArray(p.imageIndices) ? p.imageIndices : [1]
+          const productImages = indices.map((idx) => items[idx - 1]?.url).filter(Boolean)
+          const finalVariants = (Array.isArray(p.colorVariants) ? p.colorVariants : []).map((v) => {
+            const vIndices = Array.isArray(v.imageIndices) ? v.imageIndices : []
+            const vImgs = vIndices.map((idx) => items[idx - 1]?.url).filter(Boolean)
+            return {
+              colour: v.colour || 'Standard',
+              images: vImgs.length ? vImgs : productImages,
+              image: vImgs[0] || productImages[0] || ''
+            }
+          })
+
+          return {
+            name: p.name || 'Boutique Dress',
+            collection: p.collection || 'Kurtis',
+            description: p.description || '',
+            colours: Array.isArray(p.colours) ? p.colours : (p.colours ? [p.colours] : []),
+            colorVariants: finalVariants,
+            images: productImages.length ? productImages : [items[0]?.url || ''],
+            image: productImages[0] || items[0]?.url || '',
+            buyPrice: '',
+            fixedPrice: '',
+            price: 0,
+            sizes: [],
+            stock: {},
+            pending: true,
+            status: 'PENDING',
+            published: false
+          }
+        })
+
+        return json({ success: true, products: finalProducts })
+      } else {
+        // Hugging Face: Inspect each image to extract dress signature & intelligently auto-group
+        const itemSignatures = []
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i]
+          const cleanB64 = it.base64?.includes(',') ? it.base64.split(',')[1] : (it.base64 || '')
+          const dataUrl = `data:${it.mimeType || 'image/jpeg'};base64,${cleanB64}`
+
+          const prompt = `You are a fashion cataloguer for "PAPA'S BOUTIQUE". Inspect this photo and return ONLY a raw JSON object with:
+{
+  "name": "Attractive Product Title (e.g. Zari Embroidered Silk Kurti)",
+  "collection": "Category (Choose ONLY one: Kurtis, Leggings, Dupatta, Sarees, Occasion, Everyday Ease)",
+  "description": "2-3 attractive sentences describing the fabric, neckline, sleeves, embroidery, and styling tips.",
+  "primaryColor": "Exact Color Name (e.g. Navy Blue, Maroon, Mustard Yellow, Jet Black, Emerald Green)",
+  "garmentCut": "Classification (e.g. Straight Kurti, Anarkali, A-line Kurti, Leggings, Silk Dupatta)",
+  "patternDesign": "Pattern Style (e.g. Floral Embroidery, Solid Plain, Zari Booti, Bandhani, Geometric)",
+  "fabric": "Fabric type (e.g. Rayon, Silk, Cotton, Georgette, Chanderi)"
+}`
+
+          try {
+            const hfRes = await fetch('https://router.huggingface.co/hf-inference/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${cleanToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                model: model,
+                messages: [
+                  {
+                    role: 'user',
+                    content: [
+                      { type: 'text', text: prompt },
+                      { type: 'image_url', image_url: { url: dataUrl } }
+                    ]
+                  }
+                ],
+                max_tokens: 350,
+                temperature: 0.1
+              })
+            })
+
+            if (!hfRes.ok) {
+              const errText = await hfRes.text()
+              let parsedErr = errText
+              try { parsedErr = JSON.parse(errText).error || errText } catch {}
+              if (i === 0) {
+                return json({ error: `Hugging Face API error (${hfRes.status}): ${typeof parsedErr === 'object' ? JSON.stringify(parsedErr) : parsedErr}\n\nPlease check that your token has "Read" permission at https://huggingface.co/settings/tokens.` }, hfRes.status)
+              }
+            }
+
+            const hfData = await hfRes.json()
+            const content = hfData?.choices?.[0]?.message?.content || ''
+            const cleanJson = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+            let parsed = {}
+            try { parsed = JSON.parse(cleanJson) } catch {
+              const m = cleanJson.match(/\{[\s\S]*\}/)
+              if (m) parsed = JSON.parse(m[0])
+            }
+
+            itemSignatures.push({
+              item: it,
+              data: parsed
+            })
+          } catch (itemErr) {
+            console.warn(`HF analysis notice for ${it.name}:`, itemErr.message)
+            itemSignatures.push({
+              item: it,
+              data: {
+                name: `Dress (${it.name.replace(/\.[^.]+$/, '')})`,
+                collection: 'Kurtis',
+                description: 'Elegant boutique dress crafted with fine detailing.',
+                primaryColor: 'Standard',
+                garmentCut: 'Kurti',
+                patternDesign: it.name,
+                fabric: 'Cotton'
+              }
+            })
+          }
+        }
+
+        // Automatic Grouping Algorithm:
+        // 1. If two photos share same garmentCut + patternDesign + fabric:
+        //    - If same primaryColor -> Different poses of same dress! (1 color, 0 variants, multiple photos)
+        //    - If different primaryColor -> Same dress in multiple colors! (Grouped with colorVariants)
+        // 2. Otherwise -> Strictly separate products!
+        const groupedMap = new Map()
+
+        for (const sig of itemSignatures) {
+          const d = sig.data || {}
+          const cut = (d.garmentCut || 'Kurti').toLowerCase().trim()
+          const pattern = (d.patternDesign || d.name || '').toLowerCase().trim()
+          const collection = d.collection || 'Kurtis'
+          const groupKey = `${collection}::${cut}::${pattern}`
+
+          if (!groupedMap.has(groupKey)) {
+            groupedMap.set(groupKey, {
+              name: d.name || `Boutique ${cut}`,
+              collection: collection,
+              description: d.description || 'Thoughtfully chosen silhouette for beautiful moments.',
+              photosByColor: new Map()
+            })
+          }
+
+          const group = groupedMap.get(groupKey)
+          const colName = (d.primaryColor || 'Standard').trim()
+          if (!group.photosByColor.has(colName)) {
+            group.photosByColor.set(colName, [])
+          }
+          group.photosByColor.get(colName).push(sig.item.url)
+        }
+
+        const finalProducts = []
+        for (const group of groupedMap.values()) {
+          const colorsList = Array.from(group.photosByColor.keys())
+          const allImages = Array.from(group.photosByColor.values()).flat()
+
+          if (colorsList.length > 1) {
+            // Case B: Same dress in MULTIPLE colors
+            const colorVariants = colorsList.map((col) => ({
+              colour: col,
+              images: group.photosByColor.get(col),
+              image: group.photosByColor.get(col)[0] || allImages[0]
+            }))
+
+            finalProducts.push({
+              name: group.name,
+              collection: group.collection,
+              description: group.description,
+              colours: colorsList,
+              colorVariants: colorVariants,
+              images: allImages,
+              image: allImages[0] || '',
+              buyPrice: '',
+              fixedPrice: '',
+              price: 0,
+              sizes: [],
+              stock: {},
+              pending: true,
+              status: 'PENDING',
+              published: false
+            })
+          } else {
+            // Case A: Multiple poses of SAME dress in ONE color (no extra variants needed!)
+            finalProducts.push({
+              name: group.name,
+              collection: group.collection,
+              description: group.description,
+              colours: colorsList,
+              colorVariants: [], // Empty! Single color dress with multiple pose photos
+              images: allImages,
+              image: allImages[0] || '',
+              buyPrice: '',
+              fixedPrice: '',
+              price: 0,
+              sizes: [],
+              stock: {},
+              pending: true,
+              status: 'PENDING',
+              published: false
+            })
+          }
+        }
+
+        return json({ success: true, products: finalProducts })
+      }
+    } catch (err) {
+      return json({ error: 'Auto-grouping failed: ' + (err.message || String(err)) }, 500)
+    }
+  }
+
+  // Hugging Face Direct Vision AI Image Analysis (single image fallback)
   if (path === 'admin/ai/analyze-image' && method === 'POST') {
     const body = await requestBody(request)
     const imageBase64 = body?.imageBase64
     const mimeType = body?.mimeType || 'image/jpeg'
     const model = body?.model || 'Qwen/Qwen2.5-VL-72B-Instruct'
-    const token = body?.hfToken || process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN
+    const rawToken = body?.hfToken || process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN || ''
+    const token = rawToken.trim().replace(/^Bearer\s+/i, '').replace(/^['"]|['"]$/g, '')
 
     if (!token) {
       return json({ error: 'Hugging Face API token is required. Please provide a token in the Hugging Face AI settings.' }, 400)
