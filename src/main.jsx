@@ -1868,12 +1868,12 @@ function BulkUploader({ onComplete }) {
                   const p = e.target.value;
                   setAiProvider(p);
                   setTokenTestStatus(null);
-                  if (p === "gemini") setAiModel("gemini-1.5-flash");
-                  else setAiModel("Qwen/Qwen2.5-VL-72B-Instruct");
+                  if (p === "hf") setAiModel("Qwen/Qwen2.5-VL-72B-Instruct");
+                  else setAiModel("gemini-1.5-flash");
                 }}
               >
-                <option value="gemini">✨ Google Gemini Vision (⭐ Recommended - 100% Free Forever)</option>
-                <option value="hf">🤗 Hugging Face Vision (router.huggingface.co)</option>
+                <option value="hf">🤗 Hugging Face Vision (Qwen 2.5 VL 72B / DeepSeek V4.1)</option>
+                <option value="gemini">✨ Google Gemini Vision (gemini-1.5-flash)</option>
               </select>
             </div>
 
@@ -1887,7 +1887,22 @@ function BulkUploader({ onComplete }) {
                 value={aiModel}
                 onChange={(e) => setAiModel(e.target.value)}
               >
-                {aiProvider === "gemini" ? (
+                {aiProvider === "hf" ? (
+                  <>
+                    <option value="Qwen/Qwen2.5-VL-72B-Instruct">
+                      Qwen/Qwen2.5-VL-72B-Instruct (Flagship 72B Vision - Best Accuracy)
+                    </option>
+                    <option value="deepseek-ai/DeepSeek-V4.1-Flash">
+                      deepseek-ai/DeepSeek-V4.1-Flash (High Availability &amp; Fast)
+                    </option>
+                    <option value="google/gemma-3-27b-it">
+                      google/gemma-3-27b-it (Google Gemma 3 27B Vision)
+                    </option>
+                    <option value="google/gemma-3-4b-it">
+                      google/gemma-3-4b-it (Google Gemma 3 4B Vision - Lightweight)
+                    </option>
+                  </>
+                ) : (
                   <>
                     <option value="gemini-1.5-flash">
                       Gemini 1.5 Flash (Ultra Fast &amp; High Accuracy - Free)
@@ -1896,25 +1911,29 @@ function BulkUploader({ onComplete }) {
                       Gemini 1.5 Pro (Deep Reasoning)
                     </option>
                   </>
-                ) : (
-                  <>
-                    <option value="Qwen/Qwen2.5-VL-72B-Instruct">
-                      Qwen/Qwen2.5-VL-72B-Instruct (Best Accuracy)
-                    </option>
-                    <option value="meta-llama/Llama-3.2-11B-Vision-Instruct">
-                      meta-llama/Llama-3.2-11B-Vision-Instruct (Meta Llama 3.2 Vision)
-                    </option>
-                  </>
                 )}
               </select>
             </div>
 
             <div className="hf-config-col token-col-full">
               <label className="hf-label">
-                {aiProvider === "gemini" ? "Google Gemini API Key" : "Hugging Face API Access Token"}{" "}
+                {aiProvider === "hf" ? "Hugging Face Access Token" : "Google Gemini API Key"}{" "}
                 <span className="mandatory-star">*</span>
                 <span className="helper-txt">
-                  {aiProvider === "gemini" ? (
+                  {aiProvider === "hf" ? (
+                    <>
+                      User Access Token from{" "}
+                      <a
+                        href="https://huggingface.co/settings/tokens"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="hf-external-link"
+                      >
+                        huggingface.co/settings/tokens ↗
+                      </a>{" "}
+                      (Ensure permission: <b>Make calls to Inference Providers</b> or <b>Read</b>)
+                    </>
+                  ) : (
                     <>
                       Free API key from{" "}
                       <a
@@ -1927,37 +1946,24 @@ function BulkUploader({ onComplete }) {
                       </a>{" "}
                       (Takes 10 seconds, completely free, no credit card required)
                     </>
-                  ) : (
-                    <>
-                      Access token from{" "}
-                      <a
-                        href="https://huggingface.co/settings/tokens"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="hf-external-link"
-                      >
-                        huggingface.co/settings/tokens ↗
-                      </a>{" "}
-                      (Note: Serverless vision models may require inference credits on Hugging Face)
-                    </>
                   )}
                 </span>
               </label>
               <div className="hf-token-input-row">
                 <input
                   type={showTokenInput ? "text" : "password"}
-                  placeholder={aiProvider === "gemini" ? "AIzaSy..." : "hf_..."}
+                  placeholder={aiProvider === "hf" ? "hf_..." : "AIzaSy..."}
                   value={aiToken}
                   onChange={(e) => {
                     const val = e.target.value;
                     setAiToken(val);
                     setTokenTestStatus(null);
-                    if (val.trim().startsWith("AIza") && aiProvider !== "gemini") {
-                      setAiProvider("gemini");
-                      setAiModel("gemini-1.5-flash");
-                    } else if (val.trim().startsWith("hf_") && aiProvider !== "hf") {
+                    if (val.trim().startsWith("hf_") && aiProvider !== "hf") {
                       setAiProvider("hf");
                       setAiModel("Qwen/Qwen2.5-VL-72B-Instruct");
+                    } else if (val.trim().startsWith("AIza") && aiProvider !== "gemini") {
+                      setAiProvider("gemini");
+                      setAiModel("gemini-1.5-flash");
                     }
                   }}
                   className="hf-token-input"
@@ -1987,14 +1993,14 @@ function BulkUploader({ onComplete }) {
                 </button>
               </div>
 
-              {aiProvider === "gemini" && (
-                <div className="provider-helper-tip gemini-tip">
-                  💡 <b>Why Gemini Vision is recommended:</b> Google AI Studio provides a permanent, 100% free API key (1,500 requests/day, no credit card needed) that compares all dress photos simultaneously with superior vision recognition.
-                </div>
-              )}
               {aiProvider === "hf" && (
                 <div className="provider-helper-tip hf-tip">
-                  ⚠️ <b>Hugging Face notice:</b> Hugging Face recently retired its free serverless vision tier on <code>hf-inference</code>. If you receive "Model not supported" or credit errors, switch to <b>Google Gemini Vision</b> above for instant, 100% free analysis.
+                  🤗 <b>Hugging Face Vision AI active:</b> Powered by flagship <b>Qwen 2.5 VL 72B</b> and <b>DeepSeek V4.1 Flash</b> via <code>router.huggingface.co</code>. If a model server is busy, our backend automatically falls back to alternative vision models seamlessly!
+                </div>
+              )}
+              {aiProvider === "gemini" && (
+                <div className="provider-helper-tip gemini-tip">
+                  💡 <b>Gemini Vision active:</b> Free API key from Google AI Studio.
                 </div>
               )}
 

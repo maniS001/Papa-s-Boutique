@@ -315,14 +315,44 @@ export default async (request) => {
         const testRes = await fetch('https://huggingface.co/api/whoami-v2', {
           headers: { 'Authorization': `Bearer ${cleanToken}` }
         })
-        if (testRes.ok) {
-          const data = await testRes.json()
-          return json({ ok: true, provider: 'hf', username: data.name || data.fullname || 'Hugging Face User', message: `Connected as @${data.name || 'User'}!` })
+        if (!testRes.ok) {
+          return json({
+            ok: false,
+            error: 'Hugging Face rejected this token (401: Invalid username or password).\n\nPlease verify your token at https://huggingface.co/settings/tokens.'
+          }, 401)
         }
+        const data = await testRes.json()
+        const username = data.name || data.fullname || 'Hugging Face User'
+
+        // Check if token has permission to call Inference Providers
+        try {
+          const inferCheck = await fetch('https://router.huggingface.co/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${cleanToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              model: 'Qwen/Qwen2.5-VL-72B-Instruct',
+              messages: [{ role: 'user', content: 'hello' }],
+              max_tokens: 1
+            })
+          })
+
+          if (inferCheck.status === 403) {
+            return json({
+              ok: false,
+              error: `Token authenticated as @${username}, but is missing "Inference Providers" permission!\n\nTo fix:\n1. Go to https://huggingface.co/settings/tokens\n2. Edit this token (or click "Create new token")\n3. Check the box: "Make calls to Inference Providers" (or select "Read" under User Permissions)\n4. Save and paste the updated token.`
+            }, 403)
+          }
+        } catch {}
+
         return json({
-          ok: false,
-          error: 'Hugging Face rejected this token (401: Invalid username or password).\n\nHow to get a working token:\n1. Go to https://huggingface.co/settings/tokens\n2. Click "Create new token"\n3. Choose "Read" role (or if Fine-grained, check "Make calls to the serverless Inference API")\n4. Copy the token starting with "hf_..." and paste it here.\n(Do NOT use your personal account login password).'
-        }, 401)
+          ok: true,
+          provider: 'hf',
+          username: username,
+          message: `Connected as @${username}! Hugging Face Vision AI is ready.`
+        })
       }
     } catch (err) {
       return json({ ok: false, error: 'Could not reach API: ' + (err.message || String(err)) }, 500)
@@ -457,11 +487,22 @@ Return ONLY a valid JSON array of products:
         return json({ success: true, products: finalProducts })
       } else {
         // Hugging Face: Inspect each image to extract dress signature & intelligently auto-group
+        const candidateModels = Array.from(new Set([
+          model,
+          'Qwen/Qwen2.5-VL-72B-Instruct',
+          'deepseek-ai/DeepSeek-V4.1-Flash',
+          'google/gemma-3-27b-it',
+          'google/gemma-3-4b-it'
+        ].filter(Boolean)))
+
+        let activeModel = candidateModels[0]
         const itemSignatures = []
+
         for (let i = 0; i < items.length; i++) {
           const it = items[i]
           const cleanB64 = it.base64?.includes(',') ? it.base64.split(',')[1] : (it.base64 || '')
           const dataUrl = `data:${it.mimeType || 'image/jpeg'};base64,${cleanB64}`
+          const imgUrl = (it.url && it.url.startsWith('http')) ? it.url : dataUrl
 
           const prompt = `You are a fashion cataloguer for "PAPA'S BOUTIQUE". Inspect this photo and return ONLY a raw JSON object with:
 {
@@ -474,68 +515,83 @@ Return ONLY a valid JSON array of products:
   "fabric": "Fabric type (e.g. Rayon, Silk, Cotton, Georgette, Chanderi)"
 }`
 
-          try {
-            const hfRes = await fetch('https://router.huggingface.co/v1/chat/completions', {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${cleanToken}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                model: model,
-                messages: [
-                  {
-                    role: 'user',
-                    content: [
-                      { type: 'text', text: prompt },
-                      { type: 'image_url', image_url: { url: dataUrl } }
-                    ]
-                  }
-                ],
-                max_tokens: 350,
-                temperature: 0.1
+          let parsed = null
+          let lastErr = null
+          const modelsToTry = [activeModel, ...candidateModels.filter((m) => m !== activeModel)]
+
+          for (const currentModel of modelsToTry) {
+            try {
+              const hfRes = await fetch('https://router.huggingface.co/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${cleanToken}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  model: currentModel,
+                  messages: [
+                    {
+                      role: 'user',
+                      content: [
+                        { type: 'text', text: prompt },
+                        { type: 'image_url', image_url: { url: imgUrl } }
+                      ]
+                    }
+                  ],
+                  max_tokens: 350,
+                  temperature: 0.1
+                })
               })
-            })
 
-            if (!hfRes.ok) {
-              const errText = await hfRes.text()
-              let parsedErr = errText
-              try { parsedErr = JSON.parse(errText).error?.message || JSON.parse(errText).error || errText } catch {}
-              if (typeof parsedErr === 'object') parsedErr = JSON.stringify(parsedErr)
-              if (i === 0) {
-                const tip = '\n\n💡 RECOMMENDED FIX: Hugging Face free tier does not host serverless vision models. Switch the AI Vision Provider dropdown to "Google Gemini Vision" above! Google AI Studio provides 100% FREE access forever with no credit limits at https://aistudio.google.com/app/apikey.'
-                return json({ error: `Hugging Face API error (${hfRes.status}): ${parsedErr}${tip}` }, hfRes.status)
+              if (hfRes.ok) {
+                const hfData = await hfRes.json()
+                const content = hfData?.choices?.[0]?.message?.content || ''
+                const cleanJson = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+                try {
+                  parsed = JSON.parse(cleanJson)
+                } catch {
+                  const m = cleanJson.match(/\{[\s\S]*\}/)
+                  if (m) parsed = JSON.parse(m[0])
+                }
+
+                if (parsed) {
+                  activeModel = currentModel
+                  break
+                }
+              } else {
+                const errText = await hfRes.text()
+                let parsedErr = errText
+                try { parsedErr = JSON.parse(errText).error?.message || JSON.parse(errText).error || errText } catch {}
+                lastErr = typeof parsedErr === 'object' ? JSON.stringify(parsedErr) : parsedErr
+                console.warn(`HF model ${currentModel} error:`, lastErr)
               }
+            } catch (netErr) {
+              lastErr = netErr.message
+              console.warn(`Network error on ${currentModel}:`, netErr.message)
             }
-
-            const hfData = await hfRes.json()
-            const content = hfData?.choices?.[0]?.message?.content || ''
-            const cleanJson = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
-            let parsed = {}
-            try { parsed = JSON.parse(cleanJson) } catch {
-              const m = cleanJson.match(/\{[\s\S]*\}/)
-              if (m) parsed = JSON.parse(m[0])
-            }
-
-            itemSignatures.push({
-              item: it,
-              data: parsed
-            })
-          } catch (itemErr) {
-            console.warn(`HF analysis notice for ${it.name}:`, itemErr.message)
-            itemSignatures.push({
-              item: it,
-              data: {
-                name: `Dress (${it.name.replace(/\.[^.]+$/, '')})`,
-                collection: 'Kurtis',
-                description: 'Elegant boutique dress crafted with fine detailing.',
-                primaryColor: 'Standard',
-                garmentCut: 'Kurti',
-                patternDesign: it.name,
-                fabric: 'Cotton'
-              }
-            })
           }
+
+          if (!parsed) {
+            if (i === 0) {
+              return json({
+                error: `Hugging Face API error: ${lastErr}\n\nPlease check that your token at https://huggingface.co/settings/tokens has "Make calls to Inference Providers" enabled.`
+              }, 400)
+            }
+            parsed = {
+              name: `Dress (${it.name.replace(/\.[^.]+$/, '')})`,
+              collection: 'Kurtis',
+              description: 'Elegant boutique dress crafted with fine detailing.',
+              primaryColor: 'Standard',
+              garmentCut: 'Kurti',
+              patternDesign: it.name,
+              fabric: 'Cotton'
+            }
+          }
+
+          itemSignatures.push({
+            item: it,
+            data: parsed
+          })
         }
 
         // Automatic Grouping Algorithm:
