@@ -475,7 +475,7 @@ Return ONLY a valid JSON array of products:
 }`
 
           try {
-            const hfRes = await fetch('https://router.huggingface.co/hf-inference/v1/chat/completions', {
+            const hfRes = await fetch('https://router.huggingface.co/v1/chat/completions', {
               method: 'POST',
               headers: {
                 'Authorization': `Bearer ${cleanToken}`,
@@ -500,9 +500,11 @@ Return ONLY a valid JSON array of products:
             if (!hfRes.ok) {
               const errText = await hfRes.text()
               let parsedErr = errText
-              try { parsedErr = JSON.parse(errText).error || errText } catch {}
+              try { parsedErr = JSON.parse(errText).error?.message || JSON.parse(errText).error || errText } catch {}
+              if (typeof parsedErr === 'object') parsedErr = JSON.stringify(parsedErr)
               if (i === 0) {
-                return json({ error: `Hugging Face API error (${hfRes.status}): ${typeof parsedErr === 'object' ? JSON.stringify(parsedErr) : parsedErr}\n\nPlease check that your token has "Read" permission at https://huggingface.co/settings/tokens.` }, hfRes.status)
+                const tip = '\n\n💡 RECOMMENDED FIX: Hugging Face free tier does not host serverless vision models. Switch the AI Vision Provider dropdown to "Google Gemini Vision" above! Google AI Studio provides 100% FREE access forever with no credit limits at https://aistudio.google.com/app/apikey.'
+                return json({ error: `Hugging Face API error (${hfRes.status}): ${parsedErr}${tip}` }, hfRes.status)
               }
             }
 
@@ -655,7 +657,7 @@ Inspect this dress/clothing photo carefully and return ONLY a valid raw JSON obj
       const cleanBase64 = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64
       const dataUrl = `data:${mimeType};base64,${cleanBase64}`
 
-      const hfResponse = await fetch('https://router.huggingface.co/hf-inference/v1/chat/completions', {
+      const hfResponse = await fetch('https://router.huggingface.co/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -680,8 +682,10 @@ Inspect this dress/clothing photo carefully and return ONLY a valid raw JSON obj
       if (!hfResponse.ok) {
         const errText = await hfResponse.text()
         let parsedErr = errText
-        try { parsedErr = JSON.parse(errText).error || errText } catch {}
-        return json({ error: `Hugging Face API error (${hfResponse.status}): ${typeof parsedErr === 'object' ? JSON.stringify(parsedErr) : parsedErr}` }, hfResponse.status)
+        try { parsedErr = JSON.parse(errText).error?.message || JSON.parse(errText).error || errText } catch {}
+        if (typeof parsedErr === 'object') parsedErr = JSON.stringify(parsedErr)
+        const tip = '\n\n💡 RECOMMENDED FIX: Switch the AI Vision Provider dropdown to "Google Gemini Vision"! Google AI Studio provides 100% FREE access forever with no credit limits at https://aistudio.google.com/app/apikey.'
+        return json({ error: `Hugging Face API error (${hfResponse.status}): ${parsedErr}${tip}` }, hfResponse.status)
       }
 
       const result = await hfResponse.json()
