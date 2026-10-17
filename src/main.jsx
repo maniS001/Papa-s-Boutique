@@ -136,12 +136,27 @@ const money = (value) =>
     currency: "INR",
     maximumFractionDigits: 0,
   }).format(value);
-const api = async (path, options) => {
-  const response = await fetch(`/api/${path}`, options);
-  if (!response.ok)
-    throw new Error(
-      (await response.json().catch(() => ({}))).error || "Something went wrong",
-    );
+const api = async (path, options = {}) => {
+  const separator = path.includes("?") ? "&" : "?";
+  const url = `/api/${path}${separator}_t=${Date.now()}`;
+  const response = await fetch(url, {
+    ...options,
+    cache: "no-store",
+    headers: {
+      Pragma: "no-cache",
+      "Cache-Control": "no-cache",
+      ...(options.headers || {}),
+    },
+  });
+  if (!response.ok) {
+    const rawText = await response.text();
+    let errorMsg = rawText;
+    try {
+      const parsed = JSON.parse(rawText);
+      errorMsg = parsed.error || rawText;
+    } catch {}
+    throw new Error(errorMsg || "Something went wrong");
+  }
   return response.json();
 };
 const whatsappOrderUrl = (product) => {
@@ -1233,7 +1248,7 @@ const SAMPLE_JSON_DATA = [
   },
 ];
 
-const fileToBase64 = (file, maxWidth = 800, maxHeight = 800) => {
+const fileToBase64 = (file, maxWidth = 768, maxHeight = 768) => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -1255,7 +1270,7 @@ const fileToBase64 = (file, maxWidth = 800, maxHeight = 800) => {
         canvas.height = height;
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL("image/jpeg", 0.82));
+        resolve(canvas.toDataURL("image/jpeg", 0.75));
       };
       img.onerror = () => resolve(e.target.result);
       img.src = e.target.result;
@@ -1438,42 +1453,63 @@ function BulkUploader({ onComplete }) {
         });
       }
 
-      // 2. Call batch-analyze endpoint for automated smart grouping
-      setUploadStatus(`🤖 AI Vision analyzing ${items.length} photos & grouping poses vs colors vs designs...`);
-      const batchRes = await fetch("/api/admin/ai/batch-analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider: aiProvider,
-          token: cleanToken,
-          model: aiModel,
-          items: items,
-        }),
-      });
-      const batchData = await batchRes.json();
-      if (!batchRes.ok) {
-        throw new Error(batchData.error || "AI batch analysis failed.");
+      // 2. Call batch-analyze endpoint in chunks of up to 12 images (guarantees fast responses & avoids serverless limits)
+      const CHUNK_SIZE = 12;
+      const totalBatches = Math.ceil(items.length / CHUNK_SIZE);
+      const allAiProducts = [];
+
+      for (let b = 0; b < items.length; b += CHUNK_SIZE) {
+        const chunk = items.slice(b, b + CHUNK_SIZE);
+        const batchNum = Math.floor(b / CHUNK_SIZE) + 1;
+        setUploadStatus(`🤖 AI Vision analyzing batch ${batchNum} of ${totalBatches} (${chunk.length} photos)...`);
+
+        const batchRes = await fetch(`/api/admin/ai/batch-analyze?_t=${Date.now()}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          body: JSON.stringify({
+            provider: aiProvider,
+            token: cleanToken,
+            model: aiModel,
+            items: chunk,
+          }),
+        });
+
+        if (!batchRes.ok) {
+          const rawErr = await batchRes.text();
+          let parsedErr = rawErr;
+          try {
+            const j = JSON.parse(rawErr);
+            parsedErr = j.error || rawErr;
+          } catch {}
+          throw new Error(`Batch ${batchNum} error: ${parsedErr}`);
+        }
+
+        const batchData = await batchRes.json();
+        const batchProducts = Array.isArray(batchData?.products) ? batchData.products : [];
+        allAiProducts.push(...batchProducts);
       }
 
-      const productsToSave = Array.isArray(batchData.products) ? batchData.products : [];
-      if (!productsToSave.length) {
+      if (!allAiProducts.length) {
         throw new Error("AI did not generate any valid product entries.");
       }
 
       // 3. Save products in bulk directly into the Pendings category
-      setUploadStatus(`Saving ${productsToSave.length} dresses into Pending Review category...`);
-      const bulkRes = await fetch("/api/admin/products/bulk", {
+      setUploadStatus(`Saving ${allAiProducts.length} dresses into Pending Review category...`);
+      const bulkRes = await fetch(`/api/admin/products/bulk?_t=${Date.now()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ products: productsToSave }),
+        cache: "no-store",
+        body: JSON.stringify({ products: allAiProducts }),
       });
       const bulkData = await bulkRes.json();
       if (!bulkRes.ok) throw new Error(bulkData.error || "Failed to save products in bulk.");
 
-      alert(`🎉 Successfully analyzed and grouped your photos into ${productsToSave.length} dresses directly in your Pendings list!`);
+      const savedCount = allAiProducts.length;
+      alert(`🎉 Successfully analyzed and grouped all ${uniqueFiles.length} photos into ${savedCount} dresses directly in your Pendings list!`);
 
       if (onComplete) {
-        await onComplete("pending");
+        await onComplete("pending", bulkData.products || allAiProducts);
       }
     } catch (err) {
       alert("AI Vision Notice: " + err.message);
@@ -2706,8 +2742,9 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
   );
 }
 
-function PendingReviewList({ products, onRefresh, onSaveSuccess, onEditFull, onDelete, onDiscardAll }) {
+function PendingReviewList({ products, onRefresh, onSaveSuccess, onEditFull, onDelete, onDiscardAll, onViewLive }) {
   const pendingProducts = products.filter((p) => p.pending || p.status === "PENDING");
+  const liveCount = products.filter((p) => !p.pending && p.status !== "PENDING").length;
 
   const totalPendingUnits = pendingProducts.reduce((sum, p) => {
     return sum + Object.values(p.stock || {}).reduce((s, q) => s + (Number(q) || 0), 0);
@@ -2719,6 +2756,16 @@ function PendingReviewList({ products, onRefresh, onSaveSuccess, onEditFull, onD
         <span className="empty-pending-icon">🎉</span>
         <h3>No Pending Items!</h3>
         <p>All dresses have complete details and are active in your boutique catalogue.</p>
+        {onViewLive && (
+          <button
+            type="button"
+            className="button"
+            style={{ marginTop: "1rem" }}
+            onClick={onViewLive}
+          >
+            👉 View Live Store Inventory ({liveCount} {liveCount === 1 ? "Dress" : "Dresses"})
+          </button>
+        )}
       </div>
     );
   }
@@ -2767,7 +2814,7 @@ function Admin() {
   const [editing, setEditing] = useState(null);
   const [message, setMessage] = useState("");
   const [soldProduct, setSoldProduct] = useState(null);
-  const [activeTab, setActiveTab] = useState("single"); // "single" | "bulk"
+  const [activeTab, setActiveTab] = useState("live"); // "live" | "single" | "bulk" | "pending"
   const [adminStatusFilter, setAdminStatusFilter] = useState("ALL");
   const [adminCategoryFilter, setAdminCategoryFilter] = useState("ALL");
   const [adminSearch, setAdminSearch] = useState("");
@@ -2778,7 +2825,7 @@ function Admin() {
   const load = (targetTab) =>
     api("admin/products")
       .then(({ products }) => {
-        setProducts(products);
+        setProducts(products || []);
         setLoggedIn(true);
         if (targetTab) setActiveTab(targetTab);
       })
@@ -3054,8 +3101,15 @@ function Admin() {
         </div>
       </div>
 
-      {/* Tabs Switcher: Single Item vs Bulk Import vs Pending Items */}
+      {/* Tabs Switcher: Live Inventory vs Single Item vs Bulk Import vs Pending Items */}
       <div className="admin-tabs">
+        <button
+          type="button"
+          className={`admin-tab-btn ${activeTab === "live" ? "active" : ""}`}
+          onClick={() => setActiveTab("live")}
+        >
+          👗 Live Store Inventory ({liveProducts.length})
+        </button>
         <button
           type="button"
           className={`admin-tab-btn ${activeTab === "single" ? "active" : ""}`}
@@ -3068,7 +3122,7 @@ function Admin() {
           className={`admin-tab-btn ${activeTab === "bulk" ? "active" : ""}`}
           onClick={() => setActiveTab("bulk")}
         >
-          ⚡ Bulk Import (JSON + Images / ZIP)
+          ⚡ Bulk Import (AI / JSON)
         </button>
         <button
           type="button"
@@ -3082,7 +3136,7 @@ function Admin() {
         </button>
       </div>
 
-      {activeTab === "single" ? (
+      {activeTab === "single" && (
         <form className="editor" onSubmit={save}>
           {adminQueue && (
             <div className="queue-banner">
@@ -3285,6 +3339,7 @@ function Admin() {
                 onClick={() => {
                   setEditing(null);
                   setDraft(blank);
+                  setActiveTab("live");
                 }}
               >
                 Cancel edit
@@ -3293,23 +3348,42 @@ function Admin() {
           </div>
           <p>{message}</p>
         </form>
-      ) : activeTab === "bulk" ? (
+      )}
+
+      {activeTab === "bulk" && (
         <BulkUploader
-          onComplete={async (targetTab) => {
-            await load(targetTab || "pending");
+          onComplete={async (targetTab, newItems) => {
+            if (Array.isArray(newItems) && newItems.length) {
+              setProducts((prev) => [...newItems, ...prev]);
+            }
+            const fresh = await api("admin/products");
+            if (Array.isArray(fresh?.products)) {
+              setProducts(fresh.products);
+            }
+            setActiveTab("pending");
           }}
         />
-      ) : (
+      )}
+
+      {activeTab === "pending" && (
         <PendingReviewList
           products={products}
           onRefresh={load}
+          onViewLive={() => setActiveTab("live")}
           onSaveSuccess={(id, updatedProduct) => {
-            // Optimistically update products state immediately so pending items disappear with zero delay!
+            const cleanUpdated = {
+              ...updatedProduct,
+              pending: false,
+              status: "ACTIVE",
+              published: true,
+            };
             setProducts((prev) =>
-              prev.map((p) => (p.id === id ? updatedProduct : p))
+              prev.map((p) => (p.id === id ? cleanUpdated : p))
             );
-            setMessage(`✅ "${updatedProduct.name}" moved to live store!`);
-            load();
+            setMessage(`✅ "${cleanUpdated.name}" moved to live store!`);
+            api("admin/products").then(({ products: fresh }) => {
+              if (Array.isArray(fresh)) setProducts(fresh);
+            });
           }}
           onEditFull={(item) => {
             edit(item);
@@ -3320,8 +3394,10 @@ function Admin() {
         />
       )}
 
-      {/* Category Management Overview (Excludes Pending items) */}
-      <div className="admin-category-panel">
+      {/* Live Store Inventory Section (Visible only on 'live' tab) */}
+      {activeTab === "live" && (
+        <>
+          <div className="admin-category-panel">
         <h2>Categories Overview</h2>
         <div className="category-badges">
           {pendingProducts.length > 0 && (
@@ -3360,16 +3436,29 @@ function Admin() {
 
       <div className="section-heading">
         <div>
-          <h2>Current catalogue &amp; Inventory</h2>
+          <h2>Current Catalogue &amp; Inventory</h2>
           <p className="admin-subtitle">Filter by status or item type, manage visibility, record sales, and export stock.</p>
         </div>
-        <button
-          type="button"
-          className="button excel-export-btn"
-          onClick={() => exportInventoryToExcel(liveProducts)}
-        >
-          📊 Export Excel (.xls)
-        </button>
+        <div className="section-heading-actions">
+          <button
+            type="button"
+            className="button"
+            onClick={() => {
+              setDraft(blank);
+              setEditing(null);
+              setActiveTab("single");
+            }}
+          >
+            ➕ Add Single Item
+          </button>
+          <button
+            type="button"
+            className="button excel-export-btn"
+            onClick={() => exportInventoryToExcel(liveProducts)}
+          >
+            📊 Export Excel (.xls)
+          </button>
+        </div>
       </div>
 
       {/* Admin Multi-level Filter System */}
@@ -3607,6 +3696,8 @@ function Admin() {
         });
       })()}
       </div>
+      </>
+      )}
 
       {soldProduct && (
         <SoldModal

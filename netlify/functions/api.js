@@ -2,7 +2,7 @@ import { getStore } from '@netlify/blobs'
 import crypto from 'node:crypto'
 
 const PRODUCTS_KEY = 'catalogue.json'
-const store = () => getStore('boutique-data')
+const store = () => getStore({ name: 'boutique-data', consistency: 'strong' })
 const imageStore = () => getStore({ name: 'boutique-images', consistency: 'strong' })
 const seedProducts = [
   { id: 'rose-midi', slug: 'rose-garden-midi', name: 'Rose Garden Midi', collection: 'Summer Edit', price: 4890, description: 'A softly structured midi dress in a rose garden print, finished with a square neckline and a flowing skirt.', sizes: ['XS', 'S', 'M', 'L'], colours: ['Rose', 'Ivory'], stock: { XS: 3, S: 7, M: 5, L: 2 }, image: 'https://images.unsplash.com/photo-1566174053879-31528523f8ae?auto=format&fit=crop&w=1000&q=85', featured: true, published: true },
@@ -11,7 +11,16 @@ const seedProducts = [
 ]
 const ALLOWED_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif' }
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024 // 8 MB
-const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...headers } })
+const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), {
+  status,
+  headers: {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+    ...headers
+  }
+})
 const slugify = (value) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
 const secret = () => process.env.ADMIN_SESSION_SECRET || process.env.ADMIN_PASSWORD
 const sign = (value) => crypto.createHmac('sha256', secret()).update(value).digest('base64url')
