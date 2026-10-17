@@ -561,17 +561,48 @@ function exportInventoryToExcel(products) {
     const imgUrl = (p.images && p.images[0]) || p.image || "";
     const fullImgUrl = imgUrl.startsWith("http") ? imgUrl : `${window.location.origin}${imgUrl}`;
 
+    // Available colours / variants summary
+    const coloursList = Array.isArray(p.colours)
+      ? p.colours
+      : (typeof p.colours === "string" ? p.colours.split(",").map(c => c.trim()).filter(Boolean) : []);
+    
+    let variantBreakdownStr = "";
+    if (Array.isArray(p.colorVariants) && p.colorVariants.length > 0) {
+      variantBreakdownStr = p.colorVariants
+        .map(v => {
+          const vQty = Object.values(v.stock || {}).reduce((sum, q) => sum + (Number(q) || 0), 0);
+          return `${v.colour || "Standard"} (${vQty} pcs)`;
+        })
+        .join(", ");
+    } else if (coloursList.length > 0) {
+      variantBreakdownStr = coloursList.join(", ");
+    } else {
+      variantBreakdownStr = "Standard";
+    }
+
+    // Sold details with colour & size breakdown
+    let soldBreakdownHtml = "None";
+    if (Array.isArray(p.sales) && p.sales.length > 0) {
+      soldBreakdownHtml = p.sales
+        .map(s => `${s.quantity}x ${s.colour ? s.colour + " " : ""}(Size: ${s.size || "General"}) @ ₹${Number(s.soldPrice || 0).toLocaleString("en-IN")}`)
+        .join("<br/>");
+    } else if (soldCount > 0) {
+      soldBreakdownHtml = `${soldCount} pcs`;
+    }
+
     return `
       <tr>
         <td style="text-align:center;">${idx + 1}</td>
         <td>${fullImgUrl ? `<a href="${fullImgUrl}" target="_blank">View Photo</a>` : "No Image"}</td>
         <td><b>${p.name}</b></td>
         <td>${p.collection || "Uncategorized"}</td>
+        <td>${variantBreakdownStr}</td>
         <td style="text-align:center;">${p.published ? "Active (Visible)" : "Disabled (Hidden)"}</td>
         <td style="text-align:right;">${availableStock}</td>
         <td style="text-align:right;">₹${buyPrice.toLocaleString("en-IN")}</td>
         <td style="text-align:right;">₹${fixedPrice.toLocaleString("en-IN")}</td>
         <td style="text-align:right;">${soldCount}</td>
+        <td style="font-size:11px; color:#444;">${soldBreakdownHtml}</td>
         <td style="text-align:right;">₹${soldRevenue.toLocaleString("en-IN")}</td>
         <td style="text-align:right; font-weight:bold; color:${profit >= 0 ? "#1b6f3a" : "#a23a3e"};">₹${profit.toLocaleString("en-IN")}</td>
       </tr>
@@ -580,11 +611,12 @@ function exportInventoryToExcel(products) {
 
   const summaryHtml = `
     <tr style="background-color:#d4e6d4; font-weight:bold;">
-      <td colspan="5" style="text-align:right;">TOTALS:</td>
+      <td colspan="6" style="text-align:right;">TOTALS:</td>
       <td style="text-align:right;">${totalAvailableStock}</td>
       <td style="text-align:right;">₹${totalBuyVal.toLocaleString("en-IN")}</td>
       <td style="text-align:right;">₹${totalFixedVal.toLocaleString("en-IN")}</td>
       <td style="text-align:right;">${totalSoldUnits}</td>
+      <td style="text-align:center;">-</td>
       <td style="text-align:right;">₹${totalSoldVal.toLocaleString("en-IN")}</td>
       <td style="text-align:right; color:#1b6f3a;">₹${totalProfit.toLocaleString("en-IN")}</td>
     </tr>
@@ -611,11 +643,13 @@ function exportInventoryToExcel(products) {
               <th>Product Image</th>
               <th>Product Name</th>
               <th>Category</th>
+              <th>Colours / Variants</th>
               <th>Status</th>
               <th>Available Stock</th>
               <th>Buy Price (Unit)</th>
               <th>Fixed Price (Retail)</th>
               <th>Total Sold Count</th>
+              <th>Sold Details (Color & Size)</th>
               <th>Total Sold Revenue</th>
               <th>Net Profit</th>
             </tr>
@@ -924,11 +958,36 @@ function SizeStockSelector({ selectedSizes = [], stock = {}, onChange }) {
 function SoldModal({ product, onClose, onSoldSuccess }) {
   const [quantity, setQuantity] = useState(1);
   const [soldPrice, setSoldPrice] = useState(product.fixedPrice || product.price || "");
-  const [selectedSize, setSelectedSize] = useState(product.sizes?.[0] || "");
+
+  const hasVariants = Array.isArray(product.colorVariants) && product.colorVariants.length > 0;
+  const rawColours = Array.isArray(product.colours)
+    ? product.colours
+    : typeof product.colours === "string"
+    ? product.colours.split(",").map((c) => c.trim()).filter(Boolean)
+    : [];
+  const availableColours = hasVariants
+    ? product.colorVariants.map((v) => v.colour).filter(Boolean)
+    : rawColours;
+
+  const [selectedColour, setSelectedColour] = useState(availableColours[0] || "");
+
+  const activeVariant = hasVariants
+    ? product.colorVariants.find((v) => v.colour === selectedColour) || product.colorVariants[0]
+    : null;
+
+  const activeSizes = (activeVariant && Array.isArray(activeVariant.sizes) && activeVariant.sizes.length)
+    ? activeVariant.sizes
+    : (Array.isArray(product.sizes) && product.sizes.length ? product.sizes : ["Free Size"]);
+
+  const activeStock = (activeVariant && typeof activeVariant.stock === "object" && activeVariant.stock !== null)
+    ? activeVariant.stock
+    : (typeof product.stock === "object" && product.stock !== null ? product.stock : {});
+
+  const [selectedSize, setSelectedSize] = useState(activeSizes[0] || "");
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  const totalStock = Object.values(product.stock || {}).reduce((sum, q) => sum + (Number(q) || 0), 0);
+  const totalStock = Object.values(activeStock).reduce((sum, q) => sum + (Number(q) || 0), 0);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -958,13 +1017,14 @@ function SoldModal({ product, onClose, onSoldSuccess }) {
           quantity: qty,
           soldPrice: sp,
           size: selectedSize,
+          colour: selectedColour,
         }),
       });
 
       if (response.autoDisabled) {
         alert(`⚠️ Alert: Stock is now 0!\n"${product.name}" has been sold out and automatically disabled from the website storefront.`);
       } else {
-        alert(`✅ Sale recorded successfully!\n${qty} piece(s) sold at ₹${sp}. Remaining stock: ${response.remainingStock}`);
+        alert(`✅ Sale recorded successfully!\n${qty} piece(s) ${selectedColour ? `(${selectedColour}) ` : ""}sold at ₹${sp}. Remaining stock: ${response.remainingStock}`);
       }
 
       onSoldSuccess();
@@ -988,13 +1048,36 @@ function SoldModal({ product, onClose, onSoldSuccess }) {
             Available Stock: <b>{totalStock} pcs</b> · Buy Price: <b>₹{product.buyPrice || 0}</b> · Fixed Price: <b>₹{product.fixedPrice || product.price || 0}</b>
           </p>
 
-          {product.sizes && product.sizes.length > 0 && (
+          {availableColours.length > 0 && (
+            <label>
+              Select Color Variant
+              <select
+                value={selectedColour}
+                onChange={(e) => {
+                  const newCol = e.target.value;
+                  setSelectedColour(newCol);
+                  const matchingVar = product.colorVariants?.find((v) => v.colour === newCol);
+                  if (matchingVar?.sizes?.[0]) {
+                    setSelectedSize(matchingVar.sizes[0]);
+                  }
+                }}
+              >
+                {availableColours.map((c) => (
+                  <option key={c} value={c}>
+                    🎨 {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {activeSizes && activeSizes.length > 0 && (
             <label>
               Select Size
               <select value={selectedSize} onChange={(e) => setSelectedSize(e.target.value)}>
-                {product.sizes.map((s) => (
+                {activeSizes.map((s) => (
                   <option key={s} value={s}>
-                    {s} ({product.stock?.[s] ?? 0} in stock)
+                    {s} ({activeStock?.[s] ?? 0} in stock)
                   </option>
                 ))}
               </select>
@@ -1049,22 +1132,24 @@ function SoldModal({ product, onClose, onSoldSuccess }) {
 const AI_PROMPT_TEMPLATE = `You are a fashion cataloguer for "PAPA'S BOUTIQUE".
 I am uploading boutique dress/clothing photos (or a ZIP file containing photos). Carefully inspect each photo and generate a clean, valid JSON array for our store inventory.
 
-CRITICAL FILENAME & MATCHING RULES (EXTREMELY IMPORTANT):
-1. USE VERBATIM FILENAMES ONLY:
+CRITICAL RULES (EXTREMELY IMPORTANT):
+1. STRICT SEPARATION - TREAT EACH DRESS AS A SEPARATE PRODUCT:
+   - You MUST treat EACH UNIQUE DRESS AS A SEPARATE OBJECT in the JSON array.
+   - DO NOT group different dress designs, different patterns, different prints, or different embroidery styles together under one dress name!
+   - Every dress that has its own print, cut, fabric, or design MUST be its own independent entry in the JSON array.
+   - ONLY group images together if they are photos (e.g. front view, back view, detail close-up) of the EXACT SAME PHYSICAL DRESS.
+   - NEVER combine different dresses just because they were photographed together or have different colors. If in any doubt, create SEPARATE product objects!
+
+2. USE VERBATIM FILENAMES ONLY:
    - You MUST write the EXACT original filename of each image (e.g. "IMG_2041.jpg", "DSC_0045.png", "kurti_red.jpg").
    - NEVER rename files.
    - NEVER append artificial suffixes like "_2", "_1", "-1", "-2", "_front", "_back", or "_copy" to the image names.
    - If a file is named "kurti_red.jpg", write EXACTLY "kurti_red.jpg", NEVER "kurti_red_2.jpg".
    - If images are provided in a ZIP archive, inspect/unzip the archive and use the exact file names stored inside (without any folder paths).
 
-2. GROUP MULTIPLE PHOTOS OF THE SAME DRESS:
-   - If multiple photos show the SAME dress from different angles (front, back, neckline, embroidery close-up), group them together under ONE single product in the JSON.
-   - Put all the exact photo filenames for that dress in the "images" array.
-
-3. DETECT MULTI-COLOR VARIANTS:
-   - If the same design/pattern is photographed in multiple colors, group them as ONE product design.
-   - List all available colors in the "colours" array.
-   - In "colorVariants", map each color to its exact photo filename(s).
+3. MULTI-COLOR VARIANTS (ONLY FOR IDENTICAL GARMENT CUTS):
+   - ONLY use "colorVariants" if it is genuinely the EXACT SAME dress style, pattern, and manufacturer cut offered in different dye colors.
+   - If two garments have different prints, different embroidery motifs, or different necklines, they ARE SEPARATE PRODUCTS, NOT color variants!
 
 4. DO NOT GENERATE PRICES, SIZES, OR STOCK COUNTS:
    - Leave pricing (buyPrice, fixedPrice) and sizes/counts OUT of the JSON. The boutique admin will enter these in the admin panel.
@@ -1148,7 +1233,40 @@ const SAMPLE_JSON_DATA = [
   },
 ];
 
+const fileToBase64 = (file, maxWidth = 800, maxHeight = 800) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        if (width > maxWidth || height > maxHeight) {
+          if (width > height) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          } else {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      };
+      img.onerror = () => resolve(e.target.result);
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+};
+
 function BulkUploader({ onComplete }) {
+  const [bulkMethod, setBulkMethod] = useState("hf"); // "hf" (AI Add-on) | "json" (Standard)
   const [imageFiles, setImageFiles] = useState(new Map());
   const [jsonText, setJsonText] = useState("");
   const [inputMode, setInputMode] = useState("paste"); // "paste" | "file"
@@ -1160,6 +1278,13 @@ function BulkUploader({ onComplete }) {
   const [showAiGuide, setShowAiGuide] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [zipLoading, setZipLoading] = useState(false);
+
+  // Hugging Face Direct AI state
+  const [hfToken, setHfToken] = useState(() => localStorage.getItem("papas_hf_token") || "");
+  const [showTokenInput, setShowTokenInput] = useState(false);
+  const [hfModel, setHfModel] = useState("Qwen/Qwen2.5-VL-72B-Instruct");
+  const [hfGrouping, setHfGrouping] = useState("separate"); // "separate" (each photo is a dress) | "group" (multi-photo)
+  const [tokenSavedNotice, setTokenSavedNotice] = useState(false);
 
   const folderInputRef = React.useRef(null);
   const zipInputRef = React.useRef(null);
@@ -1221,6 +1346,182 @@ function BulkUploader({ onComplete }) {
     } finally {
       setZipLoading(false);
       if (zipInputRef.current) zipInputRef.current.value = "";
+    }
+  };
+
+  const saveHfToken = () => {
+    const clean = hfToken.trim();
+    localStorage.setItem("papas_hf_token", clean);
+    setTokenSavedNotice(true);
+    setTimeout(() => setTokenSavedNotice(false), 2500);
+  };
+
+  const handleDirectHfAnalyze = async () => {
+    const uniqueFiles = Array.from(new Set(Array.from(imageFiles.values())));
+    if (!uniqueFiles.length) {
+      alert("Please select photos first using Step 1 (Folder, ZIP file, or Photos).");
+      return;
+    }
+    const cleanToken = hfToken.trim();
+    if (!cleanToken) {
+      alert("⚠️ Hugging Face API Token is required.\n\nPlease enter your token in the Hugging Face AI Settings box below. You can get a free token from huggingface.co/settings/tokens.");
+      return;
+    }
+    localStorage.setItem("papas_hf_token", cleanToken);
+
+    setUploading(true);
+    setUploadProgress({ current: 0, total: uniqueFiles.length });
+    const preparedProducts = [];
+
+    try {
+      if (hfGrouping === "separate") {
+        // Every photo is an independent dress (prevents unwanted grouping)
+        for (let i = 0; i < uniqueFiles.length; i++) {
+          const file = uniqueFiles[i];
+          setUploadStatus(`Photo ${i + 1} of ${uniqueFiles.length}: Uploading "${file.name}" to boutique storage...`);
+          setUploadProgress({ current: i + 1, total: uniqueFiles.length });
+
+          // 1. Upload original photo
+          const formData = new FormData();
+          formData.append("image", file);
+          const uploadRes = await fetch("/api/admin/upload", {
+            method: "POST",
+            body: formData,
+          });
+          const uploadData = await uploadRes.json();
+          if (!uploadRes.ok) {
+            throw new Error(`Upload error for "${file.name}": ${uploadData.error || "Failed"}`);
+          }
+          const photoUrl = uploadData.url;
+
+          // 2. Generate optimized base64 for Hugging Face vision API
+          setUploadStatus(`Photo ${i + 1} of ${uniqueFiles.length}: Hugging Face AI analyzing "${file.name}"...`);
+          const base64Data = await fileToBase64(file);
+
+          let aiProduct = null;
+          try {
+            const aiRes = await api("admin/ai/analyze-image", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                imageBase64: base64Data,
+                mimeType: file.type || "image/jpeg",
+                model: hfModel,
+                hfToken: cleanToken,
+              }),
+            });
+            if (aiRes?.product) {
+              aiProduct = aiRes.product;
+            }
+          } catch (aiErr) {
+            console.warn(`Hugging Face AI notice for ${file.name}:`, aiErr.message);
+            if (i === 0 && (aiErr.message.includes("401") || aiErr.message.includes("token") || aiErr.message.includes("403"))) {
+              throw new Error(`Hugging Face API Authentication Error: ${aiErr.message}\nPlease check your token at huggingface.co/settings/tokens.`);
+            }
+          }
+
+          const rawColours = aiProduct?.colours
+            ? (Array.isArray(aiProduct.colours) ? aiProduct.colours : [aiProduct.colours])
+            : [];
+
+          preparedProducts.push({
+            name: aiProduct?.name || `Dress ${i + 1} (${file.name.replace(/\.[^.]+$/, "")})`,
+            collection: aiProduct?.collection || "Kurtis",
+            description: aiProduct?.description || "Elegant boutique dress with fine fabric and attractive craftsmanship.",
+            colours: rawColours,
+            colorVariants: rawColours.length > 0 ? [{ colour: rawColours[0], images: [photoUrl] }] : [],
+            images: [photoUrl],
+            image: photoUrl,
+            buyPrice: "",
+            fixedPrice: "",
+            price: 0,
+            sizes: [],
+            stock: {},
+            pending: true,
+            status: "PENDING",
+            published: false,
+          });
+        }
+      } else {
+        // Group all photos together under 1 dress
+        setUploadStatus(`Uploading all ${uniqueFiles.length} photos...`);
+        const photoUrls = [];
+        for (let i = 0; i < uniqueFiles.length; i++) {
+          const file = uniqueFiles[i];
+          setUploadProgress({ current: i + 1, total: uniqueFiles.length });
+          const formData = new FormData();
+          formData.append("image", file);
+          const uploadRes = await fetch("/api/admin/upload", {
+            method: "POST",
+            body: formData,
+          });
+          const uploadData = await uploadRes.json();
+          if (!uploadRes.ok) throw new Error(`Upload error: ${uploadData.error}`);
+          photoUrls.push(uploadData.url);
+        }
+
+        setUploadStatus(`Hugging Face AI analyzing dress style from primary photo...`);
+        const primaryFile = uniqueFiles[0];
+        const base64Data = await fileToBase64(primaryFile);
+
+        let aiProduct = null;
+        try {
+          const aiRes = await api("admin/ai/analyze-image", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              imageBase64: base64Data,
+              mimeType: primaryFile.type || "image/jpeg",
+              model: hfModel,
+              hfToken: cleanToken,
+            }),
+          });
+          if (aiRes?.product) aiProduct = aiRes.product;
+        } catch (aiErr) {
+          console.warn("AI analyze notice:", aiErr.message);
+        }
+
+        const rawColours = aiProduct?.colours
+          ? (Array.isArray(aiProduct.colours) ? aiProduct.colours : [aiProduct.colours])
+          : [];
+
+        preparedProducts.push({
+          name: aiProduct?.name || "Boutique Dress",
+          collection: aiProduct?.collection || "Kurtis",
+          description: aiProduct?.description || "Beautiful boutique dress crafted for special occasions and effortless everyday style.",
+          colours: rawColours,
+          colorVariants: [],
+          images: photoUrls,
+          image: photoUrls[0] || "",
+          buyPrice: "",
+          fixedPrice: "",
+          price: 0,
+          sizes: [],
+          stock: {},
+          pending: true,
+          status: "PENDING",
+          published: false,
+        });
+      }
+
+      setUploadStatus("Saving dresses into Pending Review category...");
+      const bulkRes = await fetch("/api/admin/products/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ products: preparedProducts }),
+      });
+      const bulkData = await bulkRes.json();
+      if (!bulkRes.ok) throw new Error(bulkData.error || "Failed to save products in bulk.");
+
+      alert(`🎉 Successfully analyzed and imported ${preparedProducts.length} dresses directly into your Pendings list!`);
+
+      if (onComplete) {
+        await onComplete("pending");
+      }
+    } catch (err) {
+      alert("AI Import Notice: " + err.message);
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -1403,41 +1704,70 @@ function BulkUploader({ onComplete }) {
     }
   };
 
+  const uniqueFilesCount = Array.from(new Set(Array.from(imageFiles.values()))).length;
+
   return (
     <div className="bulk-uploader-card">
-      <div className="bulk-top-header">
-        <div>
-          <h2>⚡ Bulk Import to Pendings</h2>
-          <p className="bulk-desc">
-            Load photos (Folder, ZIP, or Gallery) &amp; AI-generated JSON. Photos will be uploaded and dresses will be saved under the <strong>Pendings Category</strong> for you to complete prices and sizes.
-          </p>
-        </div>
-        <div className="bulk-quick-actions">
-          <button
-            type="button"
-            className="text-button"
-            onClick={() => setShowAiGuide((prev) => !prev)}
-          >
-            {showAiGuide ? "Hide AI & ZIP Guide ▲" : "🤖 Mobile AI & ZIP Guide ▼"}
-          </button>
-          <button
-            type="button"
-            className="text-button"
-            onClick={copyAiPrompt}
-          >
-            {copiedPrompt ? "✓ Prompt Copied!" : "📋 Copy AI Prompt"}
-          </button>
-          <button
-            type="button"
-            className="text-button"
-            onClick={downloadSampleJson}
-          >
-            📥 Download Sample JSON
-          </button>
-        </div>
+      {/* Import Method Switcher */}
+      <div className="bulk-method-nav">
+        <button
+          type="button"
+          className={`bulk-method-btn ${bulkMethod === "hf" ? "active" : ""}`}
+          onClick={() => setBulkMethod("hf")}
+        >
+          ✨ Auto-Analyze with Hugging Face AI (Direct / No JSON)
+          <span className="badge-new-addon">Add-on</span>
+        </button>
+        <button
+          type="button"
+          className={`bulk-method-btn ${bulkMethod === "json" ? "active" : ""}`}
+          onClick={() => setBulkMethod("json")}
+        >
+          ⚡ Import via JSON / ZIP Prompt (Standard Method)
+        </button>
       </div>
 
-      {showAiGuide && (
+      <div className="bulk-top-header">
+        <div>
+          <h2>
+            {bulkMethod === "hf"
+              ? "✨ Direct Hugging Face AI Vision Import"
+              : "⚡ Bulk Import to Pendings via JSON"}
+          </h2>
+          <p className="bulk-desc">
+            {bulkMethod === "hf"
+              ? "Select your dress photos (folder, ZIP, or gallery). Hugging Face Vision AI will automatically inspect the photos and generate dress names, categories, descriptions & colors directly into your Pendings list!"
+              : "Load photos (Folder, ZIP, or Gallery) & AI-generated JSON. Photos will be uploaded and dresses will be saved under the Pendings Category for you to complete prices and sizes."}
+          </p>
+        </div>
+        {bulkMethod === "json" && (
+          <div className="bulk-quick-actions">
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => setShowAiGuide((prev) => !prev)}
+            >
+              {showAiGuide ? "Hide AI & ZIP Guide ▲" : "🤖 Mobile AI & ZIP Guide ▼"}
+            </button>
+            <button
+              type="button"
+              className="text-button"
+              onClick={copyAiPrompt}
+            >
+              {copiedPrompt ? "✓ Prompt Copied!" : "📋 Copy AI Prompt"}
+            </button>
+            <button
+              type="button"
+              className="text-button"
+              onClick={downloadSampleJson}
+            >
+              📥 Download Sample JSON
+            </button>
+          </div>
+        )}
+      </div>
+
+      {bulkMethod === "json" && showAiGuide && (
         <div className="ai-guide-box">
           <h3>📱 How to Generate Product JSON with ChatGPT / Gemini (with ZIP or Photos):</h3>
           <ol>
@@ -1452,7 +1782,7 @@ function BulkUploader({ onComplete }) {
               </ul>
             </li>
             <li>
-              <b>Paste Prompt &amp; Run:</b> Send the prompt. The AI will inspect the photos and use the <b>exact original filenames</b> without adding suffixes like <code>_2</code>.
+              <b>Paste Prompt &amp; Run:</b> Send the prompt. The AI will inspect the photos and generate separate dresses for each distinct pattern.
             </li>
             <li>
               <b>Upload to Papa's Boutique:</b> Select your photos folder or the same <b>.zip file</b> in <b>Step 1</b>, paste the JSON in <b>Step 2</b>, and click <b>"Upload Photos &amp; Save All to Pendings"</b>!
@@ -1464,13 +1794,13 @@ function BulkUploader({ onComplete }) {
         </div>
       )}
 
-      {/* Step 1: Select Images */}
+      {/* Step 1: Select Images (Shared by both methods) */}
       <div className="bulk-step-box">
         <div className="bulk-step-title">
           <span className="step-num">1</span>
           <div>
             <h3>Select Dress Photos (Folder, ZIP file, or Multi-select)</h3>
-            <p>Choose the folder, a .zip archive, or multiple photos corresponding to the dresses in your JSON.</p>
+            <p>Choose the folder, a .zip archive, or multiple photos of your dresses.</p>
           </div>
         </div>
 
@@ -1533,22 +1863,23 @@ function BulkUploader({ onComplete }) {
           )}
         </div>
 
-        {imageFiles.size > 0 && (
+        {uniqueFilesCount > 0 && (
           <div className="selected-photos-summary">
             <span className="badge-photos-count">
-              ✓ <b>{imageFiles.size}</b> images ready for upload
+              ✓ <b>{uniqueFilesCount}</b> unique images ready
             </span>
             <div className="photo-names-chip-list">
               {Array.from(imageFiles.keys())
+                .filter((k) => !k.includes(" "))
                 .slice(0, 8)
                 .map((name, i) => (
                   <span key={i} className="photo-name-chip">
                     {name}
                   </span>
                 ))}
-              {imageFiles.size > 8 && (
+              {uniqueFilesCount > 8 && (
                 <span className="photo-name-chip more">
-                  +{imageFiles.size - 8} more
+                  +{uniqueFilesCount - 8} more
                 </span>
               )}
             </div>
@@ -1556,144 +1887,125 @@ function BulkUploader({ onComplete }) {
         )}
       </div>
 
-      {/* Step 2: Provide JSON */}
-      <div className="bulk-step-box">
-        <div className="bulk-step-title">
-          <span className="step-num">2</span>
-          <div>
-            <h3>Provide Product JSON Data</h3>
-            <p>Paste the JSON generated from ChatGPT/Gemini, or upload a .json file.</p>
-          </div>
-        </div>
-
-        <div className="json-input-tabs">
-          <button
-            type="button"
-            className={`tab-toggle ${inputMode === "paste" ? "active" : ""}`}
-            onClick={() => setInputMode("paste")}
-          >
-            ✍️ Paste JSON Directly (Recommended for Mobile)
-          </button>
-          <button
-            type="button"
-            className={`tab-toggle ${inputMode === "file" ? "active" : ""}`}
-            onClick={() => setInputMode("file")}
-          >
-            📄 Upload .json File
-          </button>
-        </div>
-
-        {inputMode === "paste" ? (
-          <textarea
-            className="bulk-json-textarea"
-            placeholder="Paste your JSON array here (e.g. from ChatGPT or Gemini)..."
-            value={jsonText}
-            onChange={handleJsonTextChange}
-          />
-        ) : (
-          <div className="json-file-picker">
-            <input
-              ref={jsonFileInputRef}
-              type="file"
-              accept=".json,application/json"
-              onChange={handleJsonFileUpload}
-            />
-            {jsonText && <p className="json-loaded-hint">✓ JSON loaded ({parsedItems.length} items parsed)</p>}
-          </div>
-        )}
-
-        {parseError && (
-          <div className="json-status error">
-            ⚠️ <b>JSON Error:</b> {parseError}
-          </div>
-        )}
-
-        {parsedItems.length > 0 && !parseError && (
-          <div className="json-status success">
-            ✅ <b>Ready!</b> Parsed <b>{parsedItems.length}</b> dresses from JSON.
-          </div>
-        )}
-      </div>
-
-      {/* Step 3: Preview Table */}
-      {parsedItems.length > 0 && !parseError && (
-        <div className="bulk-step-box">
+      {/* METHOD A: Hugging Face AI Direct Analysis */}
+      {bulkMethod === "hf" && (
+        <div className="bulk-step-box hf-step-box">
           <div className="bulk-step-title">
-            <span className="step-num">3</span>
+            <span className="step-num">2</span>
             <div>
-              <h3>Import Preview ({parsedItems.length} Dresses)</h3>
-              <p>Review dresses and photo matches. Suffixes like _2 or -1 are automatically matched to the base photo name.</p>
+              <h3>Hugging Face Vision AI Configuration</h3>
+              <p>Configure model settings and your free Hugging Face API token.</p>
             </div>
           </div>
 
-          <div className="bulk-preview-container">
-            <table className="bulk-preview-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Dress Name</th>
-                  <th>Category</th>
-                  <th>Colours / Variants</th>
-                  <th>Photos Match Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {parsedItems.map((item, idx) => {
-                  const imgs = Array.isArray(item.images)
-                    ? item.images
-                    : (item.image ? [item.image] : []);
-                  const matchedCount = imgs.filter((img) => {
-                    if (typeof img !== "string") return false;
-                    const t = img.trim();
-                    if (t.startsWith("http") || t.startsWith("/api/")) return true;
-                    return Boolean(findMatchingImageFile(t, imageFiles));
-                  }).length;
-                  const allMatched = imgs.length > 0 && matchedCount === imgs.length;
+          <div className="hf-config-grid">
+            <div className="hf-config-col">
+              <label className="hf-label">
+                Hugging Face API Token <span className="mandatory-star">*</span>
+                <span className="helper-txt">
+                  Free access token from{" "}
+                  <a
+                    href="https://huggingface.co/settings/tokens"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="hf-external-link"
+                  >
+                    huggingface.co/settings/tokens ↗
+                  </a>
+                </span>
+              </label>
+              <div className="hf-token-input-row">
+                <input
+                  type={showTokenInput ? "text" : "password"}
+                  placeholder="hf_..."
+                  value={hfToken}
+                  onChange={(e) => setHfToken(e.target.value)}
+                  className="hf-token-input"
+                />
+                <button
+                  type="button"
+                  className="text-button toggle-token-btn"
+                  onClick={() => setShowTokenInput((prev) => !prev)}
+                >
+                  {showTokenInput ? "Hide" : "Show"}
+                </button>
+                <button
+                  type="button"
+                  className="button-secondary save-token-btn"
+                  onClick={saveHfToken}
+                >
+                  {tokenSavedNotice ? "✓ Saved!" : "Save Token"}
+                </button>
+              </div>
+            </div>
 
-                  return (
-                    <tr key={idx}>
-                      <td>{idx + 1}</td>
-                      <td><b>{item.name || "Untitled"}</b></td>
-                      <td><span className="tag-category">{item.collection || "Kurtis"}</span></td>
-                      <td>
-                        {Array.isArray(item.colours) ? item.colours.join(", ") : (item.colours || "—")}
-                      </td>
-                      <td>
-                        {imgs.length === 0 ? (
-                          <span className="match-pill warning">No image filename</span>
-                        ) : allMatched ? (
-                          <span className="match-pill success">
-                            ✅ {matchedCount} {matchedCount === 1 ? "photo" : "photos"} matched
-                          </span>
-                        ) : matchedCount > 0 ? (
-                          <span className="match-pill warning">
-                            ⚠️ {matchedCount}/{imgs.length} photos matched
-                          </span>
-                        ) : (
-                          <span className="match-pill danger">
-                            ❌ {imgs.length} photo(s) missing
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div className="hf-config-col">
+              <label className="hf-label">
+                Vision AI Model
+                <span className="helper-txt">Selected Hugging Face multimodal vision model</span>
+              </label>
+              <select
+                className="hf-model-select"
+                value={hfModel}
+                onChange={(e) => setHfModel(e.target.value)}
+              >
+                <option value="Qwen/Qwen2.5-VL-72B-Instruct">
+                  Qwen/Qwen2.5-VL-72B-Instruct (Recommended - Best Accuracy)
+                </option>
+                <option value="meta-llama/Llama-3.2-11B-Vision-Instruct">
+                  meta-llama/Llama-3.2-11B-Vision-Instruct (Meta Llama 3.2 Vision)
+                </option>
+              </select>
+            </div>
           </div>
 
-          {/* Action Button: Upload Photos & Save All to Pendings */}
-          <div className="bulk-action-footer">
+          <div className="hf-grouping-selector">
+            <span className="hf-grouping-title">Dress Photo Grouping:</span>
+            <div className="hf-radio-group">
+              <label className={`hf-radio-card ${hfGrouping === "separate" ? "active" : ""}`}>
+                <input
+                  type="radio"
+                  name="hfGrouping"
+                  value="separate"
+                  checked={hfGrouping === "separate"}
+                  onChange={() => setHfGrouping("separate")}
+                />
+                <div className="hf-radio-content">
+                  <b>👗 Each photo is a separate dress (Independent designs)</b>
+                  <p>Guarantees dresses are never merged together. Perfect when you upload photos of different dresses.</p>
+                </div>
+              </label>
+
+              <label className={`hf-radio-card ${hfGrouping === "group" ? "active" : ""}`}>
+                <input
+                  type="radio"
+                  name="hfGrouping"
+                  value="group"
+                  checked={hfGrouping === "group"}
+                  onChange={() => setHfGrouping("group")}
+                />
+                <div className="hf-radio-content">
+                  <b>📸 All selected photos belong to 1 single dress</b>
+                  <p>Front, back, and detail photos of the exact same garment will be grouped into 1 product.</p>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div className="hf-action-footer">
             <button
               type="button"
-              className="button bulk-upload-start-btn"
-              disabled={uploading || parsedItems.length === 0}
-              onClick={handleUploadToPendings}
+              className="button hf-analyze-start-btn"
+              disabled={uploading || uniqueFilesCount === 0}
+              onClick={handleDirectHfAnalyze}
             >
               {uploading
-                ? "⏳ Uploading Photos & Saving to Pendings..."
-                : `⚡ Upload Photos & Save All to Pendings (${parsedItems.length} ${parsedItems.length === 1 ? "dress" : "dresses"})`}
+                ? "⏳ Analyzing with Hugging Face AI & Saving..."
+                : `🚀 Auto-Analyze & Save to Pendings (${uniqueFilesCount} ${uniqueFilesCount === 1 ? "photo" : "photos"})`}
             </button>
+            <p className="hf-btn-note">
+              No JSON needed! Hugging Face AI inspects each photo, extracts dress details, and saves directly into the Pendings category.
+            </p>
           </div>
 
           {uploading && (
@@ -1713,114 +2025,403 @@ function BulkUploader({ onComplete }) {
           )}
         </div>
       )}
+
+      {/* METHOD B: JSON & ZIP Standard Method */}
+      {bulkMethod === "json" && (
+        <>
+          <div className="bulk-step-box">
+            <div className="bulk-step-title">
+              <span className="step-num">2</span>
+              <div>
+                <h3>Provide Product JSON Data</h3>
+                <p>Paste the JSON generated from ChatGPT/Gemini, or upload a .json file.</p>
+              </div>
+            </div>
+
+            <div className="json-input-tabs">
+              <button
+                type="button"
+                className={`tab-toggle ${inputMode === "paste" ? "active" : ""}`}
+                onClick={() => setInputMode("paste")}
+              >
+                ✍️ Paste JSON Directly (Recommended for Mobile)
+              </button>
+              <button
+                type="button"
+                className={`tab-toggle ${inputMode === "file" ? "active" : ""}`}
+                onClick={() => setInputMode("file")}
+              >
+                📄 Upload .json File
+              </button>
+            </div>
+
+            {inputMode === "paste" ? (
+              <textarea
+                className="bulk-json-textarea"
+                placeholder="Paste your JSON array here (e.g. from ChatGPT or Gemini)..."
+                value={jsonText}
+                onChange={handleJsonTextChange}
+              />
+            ) : (
+              <div className="json-file-picker">
+                <input
+                  ref={jsonFileInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleJsonFileUpload}
+                />
+                {jsonText && <p className="json-loaded-hint">✓ JSON loaded ({parsedItems.length} items parsed)</p>}
+              </div>
+            )}
+
+            {parseError && (
+              <div className="json-status error">
+                ⚠️ <b>JSON Error:</b> {parseError}
+              </div>
+            )}
+
+            {parsedItems.length > 0 && !parseError && (
+              <div className="json-status success">
+                ✅ <b>Ready!</b> Parsed <b>{parsedItems.length}</b> dresses from JSON.
+              </div>
+            )}
+          </div>
+
+          {parsedItems.length > 0 && !parseError && (
+            <div className="bulk-step-box">
+              <div className="bulk-step-title">
+                <span className="step-num">3</span>
+                <div>
+                  <h3>Import Preview ({parsedItems.length} Dresses)</h3>
+                  <p>Review dresses and photo matches. Suffixes like _2 or -1 are automatically matched to the base photo name.</p>
+                </div>
+              </div>
+
+              <div className="bulk-preview-container">
+                <table className="bulk-preview-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Dress Name</th>
+                      <th>Category</th>
+                      <th>Colours / Variants</th>
+                      <th>Photos Match Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parsedItems.map((item, idx) => {
+                      const imgs = Array.isArray(item.images)
+                        ? item.images
+                        : (item.image ? [item.image] : []);
+                      const matchedCount = imgs.filter((img) => {
+                        if (typeof img !== "string") return false;
+                        const t = img.trim();
+                        if (t.startsWith("http") || t.startsWith("/api/")) return true;
+                        return Boolean(findMatchingImageFile(t, imageFiles));
+                      }).length;
+                      const allMatched = imgs.length > 0 && matchedCount === imgs.length;
+
+                      return (
+                        <tr key={idx}>
+                          <td>{idx + 1}</td>
+                          <td><b>{item.name || "Untitled"}</b></td>
+                          <td><span className="tag-category">{item.collection || "Kurtis"}</span></td>
+                          <td>
+                            {Array.isArray(item.colours) ? item.colours.join(", ") : (item.colours || "—")}
+                          </td>
+                          <td>
+                            {imgs.length === 0 ? (
+                              <span className="match-pill warning">No image filename</span>
+                            ) : allMatched ? (
+                              <span className="match-pill success">
+                                ✅ {matchedCount} {matchedCount === 1 ? "photo" : "photos"} matched
+                              </span>
+                            ) : matchedCount > 0 ? (
+                              <span className="match-pill warning">
+                                ⚠️ {matchedCount}/{imgs.length} photos matched
+                              </span>
+                            ) : (
+                              <span className="match-pill danger">
+                                ❌ {imgs.length} photo(s) missing
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="bulk-action-footer">
+                <button
+                  type="button"
+                  className="button bulk-upload-start-btn"
+                  disabled={uploading || parsedItems.length === 0}
+                  onClick={handleUploadToPendings}
+                >
+                  {uploading
+                    ? "⏳ Uploading Photos & Saving to Pendings..."
+                    : `⚡ Upload Photos & Save All to Pendings (${parsedItems.length} ${parsedItems.length === 1 ? "dress" : "dresses"})`}
+                </button>
+              </div>
+
+              {uploading && (
+                <div className="bulk-upload-progress-box">
+                  <p className="progress-status-txt">{uploadStatus}</p>
+                  {uploadProgress.total > 0 && (
+                    <div className="progress-bar-track">
+                      <div
+                        className="progress-bar-fill"
+                        style={{
+                          width: `${Math.round((uploadProgress.current / uploadProgress.total) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
 
 function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
-  const [buyPrice, setBuyPrice] = useState(
-    product.buyPrice !== undefined && product.buyPrice !== null && product.buyPrice !== 0
-      ? String(product.buyPrice)
-      : ""
-  );
-  const [fixedPrice, setFixedPrice] = useState(
-    product.fixedPrice || product.price ? String(product.fixedPrice || product.price) : ""
-  );
-  const [sizes, setSizes] = useState(
-    Array.isArray(product.sizes)
-      ? product.sizes
-      : typeof product.sizes === "string"
-      ? product.sizes.split(",").map((s) => s.trim()).filter(Boolean)
-      : []
-  );
-  const [stock, setStock] = useState(
-    typeof product.stock === "object" && product.stock !== null ? product.stock : {}
-  );
-  const [saving, setSaving] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
-
-  const handlePublish = async () => {
-    setErrorMsg("");
-    const buyPriceNum = Number(buyPrice);
-    const fixedPriceNum = Number(fixedPrice);
-
-    if (buyPrice === "" || isNaN(buyPriceNum) || buyPriceNum < 0) {
-      setErrorMsg("⚠️ Buy Price is mandatory. Please enter cost price.");
-      return;
-    }
-    if (fixedPrice === "" || isNaN(fixedPriceNum) || fixedPriceNum <= 0) {
-      setErrorMsg("⚠️ Fixed Price is mandatory. Please enter selling price.");
-      return;
-    }
-    if (!sizes.length) {
-      setErrorMsg("⚠️ Please select at least one available size.");
-      return;
-    }
-    const totalQty = Object.values(stock).reduce((s, q) => s + (Number(q) || 0), 0);
-    if (totalQty <= 0) {
-      setErrorMsg("⚠️ Quantity must be at least 1 piece for selected size(s).");
-      return;
-    }
-
-    setSaving(true);
-    try {
-      const response = await fetch("/api/admin/products", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...product,
-          buyPrice: buyPriceNum,
-          fixedPrice: fixedPriceNum,
-          price: fixedPriceNum,
-          sizes,
-          stock,
-          pending: false,
-          status: "ACTIVE",
-          published: true,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Failed to publish product.");
-      onSaveSuccess(product.id, data.product);
-    } catch (err) {
-      setErrorMsg(err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const imagesList = product.images?.length
     ? product.images
     : product.image
     ? [product.image]
     : [];
 
+  const [activeImgIndex, setActiveImgIndex] = useState(0);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [copiedNotice, setCopiedNotice] = useState(false);
+
+  const rawColours = Array.isArray(product.colours)
+    ? product.colours
+    : typeof product.colours === "string"
+    ? product.colours.split(",").map((c) => c.trim()).filter(Boolean)
+    : [];
+
+  // Initialize variants
+  const [variants, setVariants] = useState(() => {
+    if (Array.isArray(product.colorVariants) && product.colorVariants.length > 0) {
+      return product.colorVariants.map((v, idx) => ({
+        colour: v.colour || (rawColours[idx] || `Color ${idx + 1}`),
+        image: v.image || (v.images && v.images[0]) || imagesList[idx] || imagesList[0] || "",
+        buyPrice: v.buyPrice !== undefined && v.buyPrice !== null && v.buyPrice !== 0 ? String(v.buyPrice) : (product.buyPrice ? String(product.buyPrice) : ""),
+        fixedPrice: v.fixedPrice || v.price ? String(v.fixedPrice || v.price) : (product.fixedPrice || product.price ? String(product.fixedPrice || product.price) : ""),
+        sizes: Array.isArray(v.sizes) && v.sizes.length ? v.sizes : (Array.isArray(product.sizes) ? product.sizes : []),
+        stock: v.stock && typeof v.stock === "object" ? v.stock : (product.stock && typeof product.stock === "object" ? product.stock : {}),
+      }));
+    }
+    if (rawColours.length > 1) {
+      return rawColours.map((colour, idx) => ({
+        colour,
+        image: imagesList[idx] || imagesList[0] || "",
+        buyPrice: product.buyPrice ? String(product.buyPrice) : "",
+        fixedPrice: product.fixedPrice || product.price ? String(product.fixedPrice || product.price) : "",
+        sizes: Array.isArray(product.sizes) ? product.sizes : [],
+        stock: product.stock && typeof product.stock === "object" ? product.stock : {},
+      }));
+    }
+    return [
+      {
+        colour: rawColours[0] || "Standard",
+        image: imagesList[0] || "",
+        buyPrice: product.buyPrice ? String(product.buyPrice) : "",
+        fixedPrice: product.fixedPrice || product.price ? String(product.fixedPrice || product.price) : "",
+        sizes: Array.isArray(product.sizes) ? product.sizes : [],
+        stock: product.stock && typeof product.stock === "object" ? product.stock : {},
+      },
+    ];
+  });
+
+  const handleUpdateVariant = (index, field, value) => {
+    setVariants((prev) =>
+      prev.map((v, i) => (i === index ? { ...v, [field]: value } : v))
+    );
+  };
+
+  const handleApplyToAllVariants = () => {
+    if (variants.length <= 1) return;
+    const first = variants[0];
+    setVariants((prev) =>
+      prev.map((v, i) =>
+        i === 0
+          ? v
+          : {
+              ...v,
+              buyPrice: first.buyPrice,
+              fixedPrice: first.fixedPrice,
+              sizes: [...first.sizes],
+              stock: { ...first.stock },
+            }
+      )
+    );
+    setCopiedNotice(true);
+    setTimeout(() => setCopiedNotice(false), 3000);
+  };
+
+  const handleAddVariant = () => {
+    const nextNum = variants.length + 1;
+    const first = variants[0];
+    setVariants([
+      ...variants,
+      {
+        colour: `Color ${nextNum}`,
+        image: imagesList[variants.length] || imagesList[0] || "",
+        buyPrice: first ? first.buyPrice : "",
+        fixedPrice: first ? first.fixedPrice : "",
+        sizes: first ? [...first.sizes] : [],
+        stock: first ? { ...first.stock } : {},
+      },
+    ]);
+  };
+
+  const handleRemoveVariant = (indexToRemove) => {
+    if (variants.length <= 1) return;
+    setVariants(variants.filter((_, idx) => idx !== indexToRemove));
+  };
+
+  const totalQuantityCombined = variants.reduce((sum, v) => {
+    return sum + Object.values(v.stock || {}).reduce((s, q) => s + (Number(q) || 0), 0);
+  }, 0);
+
+  const handlePublish = async () => {
+    setErrorMsg("");
+    for (let i = 0; i < variants.length; i++) {
+      const v = variants[i];
+      const bp = Number(v.buyPrice);
+      const fp = Number(v.fixedPrice);
+      const label = variants.length > 1 ? `"${v.colour}" variant` : "this dress";
+      if (v.buyPrice === "" || isNaN(bp) || bp < 0) {
+        setErrorMsg(`⚠️ Buy Price is mandatory for ${label}. Please enter cost price.`);
+        return;
+      }
+      if (v.fixedPrice === "" || isNaN(fp) || fp <= 0) {
+        setErrorMsg(`⚠️ Fixed Price is mandatory for ${label}. Please enter selling price.`);
+        return;
+      }
+      if (!v.sizes || !v.sizes.length) {
+        setErrorMsg(`⚠️ Please select at least one available size for ${label}.`);
+        return;
+      }
+      const vQty = Object.values(v.stock || {}).reduce((s, q) => s + (Number(q) || 0), 0);
+      if (vQty <= 0) {
+        setErrorMsg(`⚠️ Quantity must be at least 1 piece for ${label}.`);
+        return;
+      }
+    }
+
+    setSaving(true);
+    try {
+      const consolidatedStock = {};
+      const allSizesSet = new Set();
+      variants.forEach((v) => {
+        (v.sizes || []).forEach((s) => allSizesSet.add(s));
+        Object.entries(v.stock || {}).forEach(([s, q]) => {
+          consolidatedStock[s] = (consolidatedStock[s] || 0) + (Number(q) || 0);
+        });
+      });
+
+      const first = variants[0];
+      const primaryBuyPrice = Number(first.buyPrice);
+      const primaryFixedPrice = Number(first.fixedPrice);
+
+      const payload = {
+        ...product,
+        buyPrice: primaryBuyPrice,
+        fixedPrice: primaryFixedPrice,
+        price: primaryFixedPrice,
+        sizes: Array.from(allSizesSet),
+        stock: consolidatedStock,
+        colours: variants.map((v) => v.colour),
+        colorVariants: variants.map((v) => ({
+          ...v,
+          buyPrice: Number(v.buyPrice),
+          fixedPrice: Number(v.fixedPrice),
+          price: Number(v.fixedPrice),
+        })),
+        pending: false,
+        status: "ACTIVE",
+        published: true,
+      };
+
+      const response = await api("admin/products", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      onSaveSuccess(product.id, response.product || payload);
+    } catch (err) {
+      setErrorMsg(err.message || "Failed to publish product.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="pending-item-card">
       <div className="pending-card-header">
-        <div className="pending-img-thumb">
-          <img
-            src={imagesList[0] || "/placeholder.jpg"}
-            alt={product.name}
-            onError={(e) => {
-              e.target.src =
-                "data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%2280%22%20height%3D%22100%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Crect%20fill%3D%22%23eee%22%20width%3D%2280%22%20height%3D%22100%22%2F%3E%3Ctext%20fill%3D%22%23aaa%22%20font-size%3D%2211%22%20x%3D%2250%25%22%20y%3D%2250%25%22%20text-anchor%3D%22middle%22%3ENo%20Img%3C%2Ftext%3E%3C%2Fsvg%3E";
-            }}
-          />
+        {/* Multi-Photo Gallery Preview with Thumbnails */}
+        <div className="pending-gallery-box">
+          <div
+            className="pending-img-thumb clickable-preview"
+            onClick={() => setLightboxOpen(true)}
+            title="Click to view enlarged image"
+          >
+            <img
+              src={imagesList[activeImgIndex] || imagesList[0] || "/placeholder.jpg"}
+              alt={product.name}
+              onError={(e) => {
+                e.target.src =
+                  "data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%2280%22%20height%3D%22100%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Crect%20fill%3D%22%23eee%22%20width%3D%2280%22%20height%3D%22100%22%2F%3E%3Ctext%20fill%3D%22%23aaa%22%20font-size%3D%2211%22%20x%3D%2250%25%22%20y%3D%2250%25%22%20text-anchor%3D%22middle%22%3ENo%20Img%3C%2Ftext%3E%3C%2Fsvg%3E";
+              }}
+            />
+            <span className="pending-zoom-badge">🔍 Zoom</span>
+            {imagesList.length > 1 && (
+              <span className="pending-img-count">
+                {activeImgIndex + 1}/{imagesList.length} photos
+              </span>
+            )}
+          </div>
+
           {imagesList.length > 1 && (
-            <span className="pending-img-count">📸 {imagesList.length} photos</span>
+            <div className="pending-thumb-strip">
+              {imagesList.map((img, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  className={`pending-thumb-btn ${idx === activeImgIndex ? "active" : ""}`}
+                  onClick={() => setActiveImgIndex(idx)}
+                  title={`Photo ${idx + 1}`}
+                >
+                  <img src={img} alt={`Thumb ${idx + 1}`} />
+                </button>
+              ))}
+            </div>
           )}
         </div>
 
         <div className="pending-info">
           <div className="pending-badges-row">
-            <span className="badge-pending-tag">⏳ PENDING DETAILS</span>
+            <span className="badge-pending-tag">⏳ PENDING REVIEW</span>
             <span className="tag-category">{product.collection || "Kurtis"}</span>
-            {product.colours && (
+            {variants.length > 0 && (
               <span className="pending-colour-badge">
-                🎨 {Array.isArray(product.colours) ? product.colours.join(", ") : product.colours}
+                🎨 {variants.map((v) => v.colour).join(" · ")}
               </span>
             )}
+            <span className="pending-photos-count-badge">
+              📸 {imagesList.length} {imagesList.length === 1 ? "photo" : "photos"}
+            </span>
           </div>
           <h3 className="pending-product-name">{product.name}</h3>
           <p className="pending-desc">{product.description}</p>
@@ -1847,78 +2448,158 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
       </div>
 
       <div className="pending-card-body">
-        <div className="pending-fields-grid">
-          <div className="pending-field-group">
-            <label>
-              Buy Price (₹) <span className="mandatory-star">*</span>
-              <span className="helper-txt">(Cost price per unit - Mandatory)</span>
-            </label>
-            <input
-              type="number"
-              min="0"
-              placeholder="e.g. 1500"
-              value={buyPrice}
-              onChange={(e) => setBuyPrice(e.target.value)}
-            />
+        {/* Color Variants Toolbar & Section */}
+        <div className="variants-section-header">
+          <div className="variants-title-wrap">
+            <h4 className="variants-title">
+              👗 Dress Variants &amp; Pricing ({variants.length} {variants.length === 1 ? "Color" : "Colors"}):
+            </h4>
+            <span className="variants-subtitle">
+              Enter Buy Price, Fixed Price, and pick Sizes for each dress color.
+            </span>
           </div>
-
-          <div className="pending-field-group">
-            <label>
-              Fixed Price (₹) <span className="mandatory-star">*</span>
-              <span className="helper-txt">(Selling / Retail price - Mandatory)</span>
-            </label>
-            <input
-              type="number"
-              min="0"
-              placeholder="e.g. 2990"
-              value={fixedPrice}
-              onChange={(e) => setFixedPrice(e.target.value)}
-            />
+          <div className="variants-toolbar-actions">
+            {variants.length > 1 && (
+              <button
+                type="button"
+                className="button-secondary apply-all-btn"
+                onClick={handleApplyToAllVariants}
+                title="Copies price, sizes, and quantities from Color 1 to all other colors"
+              >
+                ⚡ Use Details for All Colors
+              </button>
+            )}
+            <button
+              type="button"
+              className="text-button add-variant-btn"
+              onClick={handleAddVariant}
+            >
+              + Add Color Variant
+            </button>
           </div>
         </div>
 
-        <div className="pending-size-section">
-          <div className="field-group-header">
-            <span className="field-group-title">
-              Available Sizes &amp; Stock Count <span className="mandatory-star">*</span>
-            </span>
-            <span className="field-group-subtitle">
-              Click any size to select (defaults to 1 piece). Adjust quantities with + / - buttons.
-            </span>
+        {copiedNotice && (
+          <div className="apply-all-alert">
+            ✓ Copied Buy Price, Fixed Price, Sizes, and Stock from <b>"{variants[0].colour}"</b> to all other colors!
           </div>
-          <SizeStockSelector
-            selectedSizes={sizes}
-            stock={stock}
-            onChange={(newSizes, newStock) => {
-              setSizes(newSizes);
-              setStock(newStock);
-            }}
-          />
+        )}
+
+        {/* Variants List */}
+        <div className="variants-cards-container">
+          {variants.map((variant, idx) => (
+            <div key={idx} className="variant-editor-card">
+              <div className="variant-card-top">
+                <div className="variant-label-row">
+                  <span className="variant-pill-tag">Color #{idx + 1}</span>
+                  <input
+                    type="text"
+                    className="variant-name-input"
+                    value={variant.colour}
+                    onChange={(e) => handleUpdateVariant(idx, "colour", e.target.value)}
+                    placeholder="e.g. Ruby Red, Mustard Yellow..."
+                  />
+                </div>
+                {variants.length > 1 && (
+                  <button
+                    type="button"
+                    className="text-button remove-variant-btn"
+                    onClick={() => handleRemoveVariant(idx)}
+                    title="Remove this color variant"
+                  >
+                    ✕ Remove Color
+                  </button>
+                )}
+              </div>
+
+              <div className="pending-fields-grid">
+                <div className="pending-field-group">
+                  <label>
+                    Buy Price (₹) <span className="mandatory-star">*</span>
+                    <span className="helper-txt">(Cost price per unit - Mandatory)</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="e.g. 1500"
+                    value={variant.buyPrice}
+                    onChange={(e) => handleUpdateVariant(idx, "buyPrice", e.target.value)}
+                  />
+                </div>
+
+                <div className="pending-field-group">
+                  <label>
+                    Fixed Price (₹) <span className="mandatory-star">*</span>
+                    <span className="helper-txt">(Selling / Retail price - Mandatory)</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="e.g. 2990"
+                    value={variant.fixedPrice}
+                    onChange={(e) => handleUpdateVariant(idx, "fixedPrice", e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="pending-size-section">
+                <div className="field-group-header">
+                  <span className="field-group-title">
+                    Available Sizes &amp; Stock Count for "{variant.colour}" <span className="mandatory-star">*</span>
+                  </span>
+                  <span className="field-group-subtitle">
+                    Click any size to select (defaults to 1 piece). Adjust quantities with + / - buttons.
+                  </span>
+                </div>
+                <SizeStockSelector
+                  selectedSizes={variant.sizes || []}
+                  stock={variant.stock || {}}
+                  onChange={(newSizes, newStock) => {
+                    handleUpdateVariant(idx, "sizes", newSizes);
+                    handleUpdateVariant(idx, "stock", newStock);
+                  }}
+                />
+              </div>
+            </div>
+          ))}
         </div>
 
         {errorMsg && <p className="pending-error-banner">{errorMsg}</p>}
 
         <div className="pending-card-footer">
+          <div className="pending-total-stock-summary">
+            Total Combined Units: <b>{totalQuantityCombined} pieces</b>
+            {variants.length > 1 && <span className="variants-count-note"> (across {variants.length} colors)</span>}
+          </div>
           <button
             type="button"
             className="button complete-publish-btn"
             disabled={saving}
             onClick={handlePublish}
           >
-            {saving ? "⏳ Publishing..." : "✓ Complete & Move to Live Store"}
+            {saving ? "⏳ Moving to Live Store..." : "✓ Complete & Move to Live Store"}
           </button>
         </div>
       </div>
+
+      {lightboxOpen && (
+        <ImageLightbox
+          images={imagesList}
+          currentIndex={activeImgIndex}
+          onClose={() => setLightboxOpen(false)}
+          onSelectIndex={setActiveImgIndex}
+        />
+      )}
     </div>
   );
 }
 
-function PendingReviewList({ products, onRefresh, onEditFull, onDelete }) {
+function PendingReviewList({ products, onRefresh, onSaveSuccess, onEditFull, onDelete, onDiscardAll }) {
   const pendingProducts = products.filter((p) => p.pending || p.status === "PENDING");
 
-  const handleSaveSuccess = () => {
-    onRefresh();
-  };
+  const totalPendingUnits = pendingProducts.reduce((sum, p) => {
+    return sum + Object.values(p.stock || {}).reduce((s, q) => s + (Number(q) || 0), 0);
+  }, 0);
 
   if (pendingProducts.length === 0) {
     return (
@@ -1933,11 +2614,21 @@ function PendingReviewList({ products, onRefresh, onEditFull, onDelete }) {
   return (
     <div className="pending-review-section">
       <div className="pending-section-banner">
-        <div>
-          <h2>⏳ Pending Review ({pendingProducts.length} Dresses)</h2>
+        <div className="pending-banner-text">
+          <h2>⏳ Pending Review ({pendingProducts.length} {pendingProducts.length === 1 ? "Dress" : "Dresses"})</h2>
           <p>
-            These dresses were imported with partial data from AI JSON. Enter the <strong>Buy Price</strong>, <strong>Fixed Price</strong>, and choose <strong>Sizes</strong> on each card below, then click <strong>"Complete &amp; Move to Live Store"</strong>.
+            These dresses were imported with partial data. All photos for each dress are displayed below. Enter the <strong>Buy Price</strong>, <strong>Fixed Price</strong>, and choose <strong>Sizes</strong> per color, then click <strong>"Complete &amp; Move to Live Store"</strong>.
           </p>
+        </div>
+        <div className="pending-banner-actions">
+          <button
+            type="button"
+            className="button-secondary discard-all-pending-btn"
+            onClick={onDiscardAll}
+            title="Permanently remove all pending items"
+          >
+            🗑️ Discard All Pendings ({pendingProducts.length})
+          </button>
         </div>
       </div>
 
@@ -1946,7 +2637,7 @@ function PendingReviewList({ products, onRefresh, onEditFull, onDelete }) {
           <PendingItemCard
             key={p.id}
             product={p}
-            onSaveSuccess={handleSaveSuccess}
+            onSaveSuccess={onSaveSuccess}
             onEditFull={onEditFull}
             onDelete={onDelete}
           />
@@ -2184,6 +2875,20 @@ function Admin() {
       await api(`admin/products/${id}`, { method: "DELETE" });
     } catch (error) {
       alert("Failed to remove item: " + error.message);
+      load();
+    }
+  };
+
+  const handleDiscardAllPending = async () => {
+    if (!confirm(`Are you sure you want to discard ALL ${pendingProducts.length} pending items? This will remove them permanently.`)) {
+      return;
+    }
+    setProducts((prev) => prev.filter((p) => !p.pending && p.status !== "PENDING"));
+    try {
+      await api("admin/products/discard-pending", { method: "POST" });
+      setMessage("🗑️ All pending items have been discarded.");
+    } catch (error) {
+      alert("Failed to discard pending items: " + error.message);
       load();
     }
   };
@@ -2486,11 +3191,20 @@ function Admin() {
         <PendingReviewList
           products={products}
           onRefresh={load}
+          onSaveSuccess={(id, updatedProduct) => {
+            // Optimistically update products state immediately so pending items disappear with zero delay!
+            setProducts((prev) =>
+              prev.map((p) => (p.id === id ? updatedProduct : p))
+            );
+            setMessage(`✅ "${updatedProduct.name}" moved to live store!`);
+            load();
+          }}
           onEditFull={(item) => {
             edit(item);
             setActiveTab("single");
           }}
           onDelete={remove}
+          onDiscardAll={handleDiscardAllPending}
         />
       )}
 

@@ -178,6 +178,7 @@ export default async (request) => {
         description: p.description || '',
         sizes: isPending ? (Array.isArray(p.sizes) ? p.sizes : []) : (sizesList.length ? sizesList : ['Free Size']),
         colours: coloursList,
+        colorVariants: Array.isArray(p.colorVariants) ? p.colorVariants : [],
         stock: parsedStock,
         image: imagesList[0] || '',
         images: imagesList,
@@ -252,12 +253,23 @@ export default async (request) => {
     item.stock = stockCopy
     item.soldCount = (Number(item.soldCount) || 0) + quantity
     item.totalSoldRevenue = (Number(item.totalSoldRevenue) || 0) + (soldPrice * quantity)
+
+    // Deduct stock from specific colorVariant if colour specified
+    const colour = body?.colour || ''
+    if (colour && Array.isArray(item.colorVariants)) {
+      const v = item.colorVariants.find((cv) => cv.colour === colour)
+      if (v && v.stock && v.stock[size] !== undefined) {
+        v.stock[size] = Math.max(0, (Number(v.stock[size]) || 0) - quantity)
+      }
+    }
+
     item.sales = [
       ...(Array.isArray(item.sales) ? item.sales : []),
       {
         quantity,
         soldPrice,
         size: size || 'General',
+        colour: colour || '',
         timestamp: new Date().toISOString()
       }
     ]
@@ -272,6 +284,87 @@ export default async (request) => {
         ? `Sale recorded. Total stock is now 0. This product has been automatically disabled from the storefront!`
         : `Sale recorded. Remaining stock: ${newTotalStock}.`
     })
+  }
+  // Discard all pending products
+  if (path === 'admin/products/discard-pending' && method === 'POST') {
+    const remaining = catalogue.filter((item) => !item.pending && item.status !== 'PENDING')
+    const discardedCount = catalogue.length - remaining.length
+    await saveProducts(remaining)
+    return json({ ok: true, discarded: discardedCount })
+  }
+  // Hugging Face Direct Vision AI Image Analysis
+  if (path === 'admin/ai/analyze-image' && method === 'POST') {
+    const body = await requestBody(request)
+    const imageBase64 = body?.imageBase64
+    const mimeType = body?.mimeType || 'image/jpeg'
+    const model = body?.model || 'Qwen/Qwen2.5-VL-72B-Instruct'
+    const token = body?.hfToken || process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN
+
+    if (!token) {
+      return json({ error: 'Hugging Face API token is required. Please provide a token in the Hugging Face AI settings.' }, 400)
+    }
+    if (!imageBase64) {
+      return json({ error: 'No image data received for analysis.' }, 400)
+    }
+
+    const prompt = `You are an expert Indian boutique cataloguer for "PAPA'S BOUTIQUE".
+Inspect this dress/clothing photo carefully and return ONLY a valid raw JSON object (strictly NO markdown fences, no conversational text) with these exact keys:
+{
+  "name": "Attractive Product Title (e.g. Zari Embroidered Silk Kurti)",
+  "collection": "Category (Choose ONLY one from: Kurtis, Leggings, Dupatta, Sarees, Occasion, Everyday Ease)",
+  "description": "2-3 attractive sentences describing the fabric, neckline, sleeves, embroidery, and styling tips.",
+  "colours": ["Primary Color Name"]
+}`
+
+    try {
+      const cleanBase64 = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64
+      const dataUrl = `data:${mimeType};base64,${cleanBase64}`
+
+      const hfResponse = await fetch('https://router.huggingface.co/hf-inference/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: prompt },
+                { type: 'image_url', image_url: { url: dataUrl } }
+              ]
+            }
+          ],
+          max_tokens: 450,
+          temperature: 0.1
+        })
+      })
+
+      if (!hfResponse.ok) {
+        const errText = await hfResponse.text()
+        let parsedErr = errText
+        try { parsedErr = JSON.parse(errText).error || errText } catch {}
+        return json({ error: `Hugging Face API error (${hfResponse.status}): ${typeof parsedErr === 'object' ? JSON.stringify(parsedErr) : parsedErr}` }, hfResponse.status)
+      }
+
+      const result = await hfResponse.json()
+      const content = result?.choices?.[0]?.message?.content || ''
+      const cleanJson = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+      let parsedProduct = {}
+      try {
+        parsedProduct = JSON.parse(cleanJson)
+      } catch {
+        const match = cleanJson.match(/\{[\s\S]*\}/)
+        if (match) parsedProduct = JSON.parse(match[0])
+        else throw new Error('Could not parse AI response into JSON')
+      }
+
+      return json({ success: true, product: parsedProduct })
+    } catch (err) {
+      return json({ error: 'AI analysis failed: ' + (err.message || String(err)) }, 500)
+    }
   }
   if (path.startsWith('admin/products/') && method === 'DELETE') {
     const id = path.split('/')[2]
