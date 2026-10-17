@@ -307,7 +307,16 @@ export default async (request) => {
       if (provider === 'gemini') {
         const testRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanToken}`)
         if (testRes.ok) {
-          return json({ ok: true, provider: 'gemini', message: 'Google Gemini Vision API is connected successfully!' })
+          const mData = await testRes.json()
+          const valid = (mData.models || [])
+            .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+            .map((m) => (m.name || '').replace(/^models\//, ''))
+          const flashModel = valid.find((m) => m.includes('2.5-flash') || m.includes('2.0-flash')) || valid[0] || 'gemini-2.5-flash'
+          return json({
+            ok: true,
+            provider: 'gemini',
+            message: `Connected to Google Gemini Vision! Active model: ${flashModel}`
+          })
         }
         const errText = await testRes.text()
         return json({ ok: false, error: 'Invalid Google Gemini API Key. Please check your key at https://aistudio.google.com/app/apikey' }, 401)
@@ -370,7 +379,7 @@ export default async (request) => {
     const rawToken = body?.token || body?.hfToken || process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN || process.env.GEMINI_API_KEY || ''
     const cleanToken = rawToken.trim().replace(/^Bearer\s+/i, '').replace(/^['"]|['"]$/g, '')
     const provider = body?.provider || (cleanToken.startsWith('AIza') ? 'gemini' : 'hf')
-    const model = body?.model || (provider === 'gemini' ? 'gemini-1.5-flash' : 'Qwen/Qwen2.5-VL-72B-Instruct')
+    const model = body?.model || (provider === 'gemini' ? 'gemini-2.5-flash' : 'Qwen/Qwen2.5-VL-72B-Instruct')
 
     if (!cleanToken) {
       return json({ error: 'API token is required for auto-analysis.' }, 400)
@@ -379,6 +388,54 @@ export default async (request) => {
     try {
       if (provider === 'gemini') {
         // Multi-image batch grouping via Google Gemini Vision
+        let discoveredModels = []
+        try {
+          const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanToken}`)
+          if (listRes.ok) {
+            const listData = await listRes.json()
+            const valid = (listData.models || [])
+              .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+              .map((m) => (m.name || '').replace(/^models\//, ''))
+              .filter((name) => name.toLowerCase().includes('gemini'))
+
+            const preferred = [
+              'gemini-2.5-flash',
+              'gemini-2.0-flash',
+              'gemini-2.5-flash-latest',
+              'gemini-2.0-flash-001',
+              'gemini-2.0-flash-exp',
+              'gemini-1.5-flash-latest',
+              'gemini-1.5-flash',
+              'gemini-2.5-pro',
+              'gemini-2.0-pro-exp',
+              'gemini-1.5-pro'
+            ]
+            discoveredModels = valid.sort((a, b) => {
+              const idxA = preferred.indexOf(a)
+              const idxB = preferred.indexOf(b)
+              if (idxA !== -1 && idxB !== -1) return idxA - idxB
+              if (idxA !== -1) return -1
+              if (idxB !== -1) return 1
+              return a.localeCompare(b)
+            })
+          }
+        } catch (e) {
+          console.warn('Gemini ListModels query failed:', e.message)
+        }
+
+        const requestedModel = (body?.model || 'gemini-2.5-flash').replace(/^models\//, '')
+        const candidateModels = Array.from(new Set([
+          requestedModel,
+          ...discoveredModels,
+          'gemini-2.5-flash',
+          'gemini-2.0-flash',
+          'gemini-2.5-flash-latest',
+          'gemini-2.0-flash-001',
+          'gemini-1.5-flash-latest',
+          'gemini-1.5-flash',
+          'gemini-2.5-pro'
+        ].filter(Boolean)))
+
         const promptText = `You are an expert fashion inventory cataloguer for "PAPA'S BOUTIQUE".
 I am providing photos of boutique dresses. Each photo is numbered in order.
 Carefully examine and compare all photos to organize our store inventory according to these 3 STRICT RULES:
@@ -429,28 +486,61 @@ Return ONLY a valid JSON array of products:
           })
         }
 
-        const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanToken}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts }],
-            generationConfig: {
-              response_mime_type: 'application/json'
-            }
-          })
-        })
+        let parsedList = null
+        let lastGeminiErr = null
 
-        if (!geminiRes.ok) {
-          const errText = await geminiRes.text()
-          let parsedErr = errText
-          try { parsedErr = JSON.parse(errText).error?.message || errText } catch {}
-          throw new Error(`Gemini API error (${geminiRes.status}): ${parsedErr}`)
+        for (const candModel of candidateModels) {
+          const apiVersions = ['v1beta', 'v1']
+          let success = false
+
+          for (const apiVer of apiVersions) {
+            try {
+              const geminiRes = await fetch(`https://generativelanguage.googleapis.com/${apiVer}/models/${candModel}:generateContent?key=${cleanToken}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{ parts }],
+                  generationConfig: {
+                    responseMimeType: 'application/json',
+                    temperature: 0.1
+                  }
+                })
+              })
+
+              if (geminiRes.ok) {
+                const geminiData = await geminiRes.json()
+                const rawContent = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || ''
+                const cleanJson = rawContent.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+                try {
+                  parsedList = JSON.parse(cleanJson)
+                } catch {
+                  const m = cleanJson.match(/\[[\s\S]*\]/)
+                  if (m) parsedList = JSON.parse(m[0])
+                }
+
+                if (parsedList) {
+                  success = true
+                  break
+                }
+              } else {
+                const errText = await geminiRes.text()
+                let parsedErr = errText
+                try { parsedErr = JSON.parse(errText).error?.message || errText } catch {}
+                lastGeminiErr = `Gemini ${candModel} (${apiVer}): ${parsedErr}`
+                console.warn(lastGeminiErr)
+              }
+            } catch (netErr) {
+              lastGeminiErr = `Network error calling ${candModel}: ${netErr.message}`
+              console.warn(lastGeminiErr)
+            }
+          }
+
+          if (success && parsedList) break
         }
 
-        const geminiData = await geminiRes.json()
-        const rawContent = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || ''
-        const cleanJson = rawContent.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
-        const parsedList = JSON.parse(cleanJson)
+        if (!parsedList) {
+          throw new Error(`Auto-grouping failed across Gemini models: ${lastGeminiErr || 'Unknown error'}`)
+        }
 
         const finalProducts = (Array.isArray(parsedList) ? parsedList : [parsedList]).map((p) => {
           const indices = Array.isArray(p.imageIndices) ? p.imageIndices : [1]

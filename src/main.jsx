@@ -1288,7 +1288,7 @@ function BulkUploader({ onComplete }) {
   });
   const [aiModel, setAiModel] = useState(() => {
     const saved = localStorage.getItem("papas_ai_token") || "";
-    return saved.startsWith("hf_") ? "Qwen/Qwen2.5-VL-72B-Instruct" : "gemini-1.5-flash";
+    return saved.startsWith("hf_") ? "Qwen/Qwen2.5-VL-72B-Instruct" : "gemini-2.5-flash";
   });
   const [showTokenInput, setShowTokenInput] = useState(false);
   const [tokenSavedNotice, setTokenSavedNotice] = useState(false);
@@ -1869,11 +1869,11 @@ function BulkUploader({ onComplete }) {
                   setAiProvider(p);
                   setTokenTestStatus(null);
                   if (p === "hf") setAiModel("Qwen/Qwen2.5-VL-72B-Instruct");
-                  else setAiModel("gemini-1.5-flash");
+                  else setAiModel("gemini-2.5-flash");
                 }}
               >
                 <option value="hf">🤗 Hugging Face Vision (Qwen 2.5 VL 72B / DeepSeek V4.1)</option>
-                <option value="gemini">✨ Google Gemini Vision (gemini-1.5-flash)</option>
+                <option value="gemini">✨ Google Gemini Vision (gemini-2.5-flash / gemini-2.0)</option>
               </select>
             </div>
 
@@ -1904,11 +1904,14 @@ function BulkUploader({ onComplete }) {
                   </>
                 ) : (
                   <>
-                    <option value="gemini-1.5-flash">
-                      Gemini 1.5 Flash (Ultra Fast &amp; High Accuracy - Free)
+                    <option value="gemini-2.5-flash">
+                      Gemini 2.5 Flash (Recommended - Latest &amp; High Accuracy - Free)
                     </option>
-                    <option value="gemini-1.5-pro">
-                      Gemini 1.5 Pro (Deep Reasoning)
+                    <option value="gemini-2.0-flash">
+                      Gemini 2.0 Flash (Next-Gen Multimodal - Free)
+                    </option>
+                    <option value="gemini-2.5-pro">
+                      Gemini 2.5 Pro (Deep Reasoning)
                     </option>
                   </>
                 )}
@@ -1963,7 +1966,7 @@ function BulkUploader({ onComplete }) {
                       setAiModel("Qwen/Qwen2.5-VL-72B-Instruct");
                     } else if (val.trim().startsWith("AIza") && aiProvider !== "gemini") {
                       setAiProvider("gemini");
-                      setAiModel("gemini-1.5-flash");
+                      setAiModel("gemini-2.5-flash");
                     }
                   }}
                   className="hf-token-input"
