@@ -698,12 +698,12 @@ function MultiImageUploader({ images = [], onChange }) {
   const handleFiles = async (fileList) => {
     if (!fileList || !fileList.length) return;
     setUploadError("");
-    const allowed = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"];
+    const allowed = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/heic"];
     const files = Array.from(fileList);
 
     for (const file of files) {
       if (!allowed.includes(file.type)) {
-        setUploadError(`Unsupported file type (${file.name}). Please use JPEG, PNG, WebP, GIF, or AVIF.`);
+        setUploadError(`Unsupported file type (${file.name}). Please use JPEG, PNG, WebP, GIF, AVIF, or HEIC.`);
         return;
       }
       if (file.size > 8 * 1024 * 1024) {
@@ -770,7 +770,7 @@ function MultiImageUploader({ images = [], onChange }) {
           ref={inputRef}
           type="file"
           multiple
-          accept="image/jpeg,image/png,image/webp,image/gif,image/avif"
+          accept="image/jpeg,image/png,image/webp,image/gif,image/avif,image/heic"
           style={{ display: "none" }}
           onChange={(e) => handleFiles(e.target.files)}
         />
@@ -1333,7 +1333,7 @@ function BulkUploader({ onComplete }) {
     try {
       const zip = await JSZip.loadAsync(file);
       const newMap = new Map(imageFiles);
-      const imageExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"];
+      const imageExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".heic"];
       let count = 0;
 
       const entries = Object.values(zip.files).filter((entry) => {
@@ -1356,6 +1356,8 @@ function BulkUploader({ onComplete }) {
             ? "image/gif"
             : ext === "avif"
             ? "image/avif"
+            : ext === "heic"
+            ? "image/heic"
             : "image/jpeg";
         const imgFile = new File([blob], filename, { type: mime });
         newMap.set(filename.toLowerCase(), imgFile);
