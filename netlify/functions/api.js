@@ -9,7 +9,7 @@ const seedProducts = [
   { id: 'saffron-silk', slug: 'saffron-silk-slip', name: 'Saffron Silk Slip', collection: 'Occasion', price: 7290, description: 'An elegant bias-cut satin slip dress with a low back and delicate adjustable straps.', sizes: ['S', 'M', 'L'], colours: ['Saffron'], stock: { S: 4, M: 6, L: 3 }, image: 'https://images.unsplash.com/photo-1595777457583-95e059d581b8?auto=format&fit=crop&w=1000&q=85', featured: true, published: true },
   { id: 'linen-wrap', slug: 'linen-wrap-dress', name: 'Linen Wrap Dress', collection: 'Everyday Ease', price: 3990, description: 'Breathable linen with a flattering adjustable wrap waist for effortless days out.', sizes: ['XS', 'S', 'M', 'L', 'XL'], colours: ['Oat', 'Terracotta'], stock: { XS: 4, S: 8, M: 8, L: 4, XL: 2 }, image: 'https://images.unsplash.com/photo-1509631179647-0177331693ae?auto=format&fit=crop&w=1000&q=85', featured: false, published: true },
 ]
-const ALLOWED_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/heic': 'heic' }
+const ALLOWED_TYPES = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/heic': 'heic', 'image/heif': 'heic' }
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024 // 8 MB
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), {
   status,

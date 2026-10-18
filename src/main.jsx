@@ -560,6 +560,11 @@ const blank = {
 };
 
 function exportInventoryToExcel(products) {
+  // STRICT FILTER: Pending items must NEVER appear in the Excel export
+  const liveOnly = (products || []).filter(
+    (p) => !p.pending && p.status !== "PENDING" && p.category !== "pending" && p.category !== "pendings"
+  );
+
   let totalAvailableStock = 0;
   let totalSoldUnits = 0;
   let totalBuyVal = 0;
@@ -567,7 +572,7 @@ function exportInventoryToExcel(products) {
   let totalSoldVal = 0;
   let totalProfit = 0;
 
-  const rowsHtml = products.map((p, idx) => {
+  const rowsHtml = liveOnly.map((p, idx) => {
     const availableStock = Object.values(p.stock || {}).reduce((sum, q) => sum + (Number(q) || 0), 0);
     const buyPrice = Number(p.buyPrice) || 0;
     const fixedPrice = Number(p.fixedPrice || p.price) || 0;
@@ -707,28 +712,24 @@ function MultiImageUploader({ images = [], onChange }) {
   const handleFiles = async (fileList) => {
     if (!fileList || !fileList.length) return;
     setUploadError("");
-    const allowed = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/heic"];
     const files = Array.from(fileList);
-
-    for (const file of files) {
-      if (!allowed.includes(file.type)) {
-        setUploadError(`Unsupported file type (${file.name}). Please use JPEG, PNG, WebP, GIF, AVIF, or HEIC.`);
-        return;
-      }
-      if (file.size > 8 * 1024 * 1024) {
-        setUploadError(`File ${file.name} is too large. Maximum size is 8 MB.`);
-        return;
-      }
-    }
 
     setUploading(true);
     const newUrls = [];
     try {
-      for (const file of files) {
+      for (const rawFile of files) {
+        // Automatically convert HEIC/HEIF to JPEG and compress mobile images
+        const file = await convertFileToJpeg(rawFile);
         const formData = new FormData();
         formData.append("image", file);
         const response = await fetch("/api/admin/upload", { method: "POST", body: formData });
-        const data = await response.json();
+        const resText = await response.text();
+        let data = {};
+        try {
+          data = JSON.parse(resText);
+        } catch {
+          throw new Error(`Upload server error (${response.status}): ${resText.slice(0, 100)}`);
+        }
         if (!response.ok) throw new Error(data.error || "Upload failed.");
         if (data.url) newUrls.push(data.url);
       }
@@ -1245,12 +1246,168 @@ const SAMPLE_JSON_DATA = [
   },
 ];
 
-const fileToBase64 = (file, maxWidth = 768, maxHeight = 768) => {
+let heicLoaderPromise = null;
+function loadHeic2Any() {
+  if (typeof window !== "undefined" && window.heic2any) {
+    return Promise.resolve(window.heic2any);
+  }
+  if (heicLoaderPromise) return heicLoaderPromise;
+  heicLoaderPromise = new Promise((resolve) => {
+    if (typeof document === "undefined") return resolve(null);
+    const existing = document.querySelector('script[src*="heic2any"]');
+    if (existing && window.heic2any) return resolve(window.heic2any);
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js";
+    s.onload = () => resolve(window.heic2any);
+    s.onerror = (e) => {
+      console.warn("Failed to load heic2any script from CDN:", e);
+      heicLoaderPromise = null;
+      resolve(null);
+    };
+    document.head.appendChild(s);
+  });
+  return heicLoaderPromise;
+}
+
+// Convert any mobile HEIC or unsupported format to standard JPEG and compress to prevent mobile upload crashes
+async function convertFileToJpeg(file) {
+  if (!file) return file;
+  const isHeic =
+    file.type === "image/heic" ||
+    file.type === "image/heif" ||
+    /\.hei[cf]$/i.test(file.name || "");
+
+  let sourceBlob = file;
+  if (isHeic) {
+    try {
+      const h2a = await loadHeic2Any();
+      if (h2a) {
+        const converted = await h2a({
+          blob: file,
+          toType: "image/jpeg",
+          quality: 0.85,
+        });
+        sourceBlob = Array.isArray(converted) ? converted[0] : converted;
+      }
+    } catch (err) {
+      console.warn("HEIC conversion warning, falling back to canvas:", err);
+    }
+  }
+
+  // Compress & resize to max 1600px, JPEG quality 0.82
+  // Solves mobile upload timeouts and Netlify "Unexpected end of JSON input" errors!
+  return new Promise((resolve) => {
+    const objectUrl = URL.createObjectURL(sourceBlob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const maxDim = 1600;
+      let width = img.naturalWidth || img.width;
+      let height = img.naturalHeight || img.height;
+      if (width > maxDim || height > maxDim) {
+        if (width > height) {
+          height = Math.round((height * maxDim) / width);
+          width = maxDim;
+        } else {
+          width = Math.round((width * maxDim) / height);
+          height = maxDim;
+        }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            const cleanName = (file.name || "photo.jpg").replace(/\.[^.]+$/, ".jpg");
+            resolve(new File([sourceBlob], cleanName, { type: "image/jpeg" }));
+            return;
+          }
+          const cleanName = (file.name || "photo.jpg").replace(/\.[^.]+$/, ".jpg");
+          resolve(new File([blob], cleanName, { type: "image/jpeg" }));
+        },
+        "image/jpeg",
+        0.82
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      const cleanName = (file.name || "photo.jpg").replace(/\.[^.]+$/, ".jpg");
+      resolve(new File([sourceBlob], cleanName, { type: "image/jpeg" }));
+    };
+    img.src = objectUrl;
+  });
+}
+
+function SafeImage({ src, alt, className, style, onClick, title, fallback }) {
+  const [imgSrc, setImgSrc] = useState(src || "/placeholder.jpg");
+
+  useEffect(() => {
+    if (!src) {
+      setImgSrc("/placeholder.jpg");
+      return;
+    }
+    if (/\.hei[cf]/i.test(src)) {
+      fetch(src)
+        .then((r) => r.blob())
+        .then(async (blob) => {
+          const h2a = await loadHeic2Any();
+          if (h2a) {
+            const converted = await h2a({ blob, toType: "image/jpeg", quality: 0.85 });
+            const single = Array.isArray(converted) ? converted[0] : converted;
+            setImgSrc(URL.createObjectURL(single));
+          }
+        })
+        .catch(() => {});
+    } else {
+      setImgSrc(src);
+    }
+  }, [src]);
+
+  return (
+    <img
+      src={imgSrc}
+      alt={alt}
+      className={className}
+      style={style}
+      onClick={onClick}
+      title={title}
+      onError={(e) => {
+        if (imgSrc && !imgSrc.startsWith("data:") && !imgSrc.startsWith("blob:")) {
+          fetch(imgSrc)
+            .then((r) => r.blob())
+            .then(async (blob) => {
+              const h2a = await loadHeic2Any();
+              if (h2a) {
+                const converted = await h2a({ blob, toType: "image/jpeg", quality: 0.85 });
+                const single = Array.isArray(converted) ? converted[0] : converted;
+                setImgSrc(URL.createObjectURL(single));
+                return;
+              }
+              throw new Error("No heic converter");
+            })
+            .catch(() => {
+              e.target.src =
+                fallback ||
+                "data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%2280%22%20height%3D%22100%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Crect%20fill%3D%22%23eee%22%20width%3D%2280%22%20height%3D%22100%22%2F%3E%3Ctext%20fill%3D%22%23aaa%22%20font-size%3D%2211%22%20x%3D%2250%25%22%20y%3D%2250%25%22%20text-anchor%3D%22middle%22%3ENo%20Img%3C%2Ftext%3E%3C%2Fsvg%3E";
+            });
+        } else {
+          e.target.src =
+            fallback ||
+            "data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%2280%22%20height%3D%22100%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Crect%20fill%3D%22%23eee%22%20width%3D%2280%22%20height%3D%22100%22%2F%3E%3Ctext%20fill%3D%22%23aaa%22%20font-size%3D%2211%22%20x%3D%2250%25%22%20y%3D%2250%25%22%20text-anchor%3D%22middle%22%3ENo%20Img%3C%2Ftext%3E%3C%2Fsvg%3E";
+        }
+      }}
+    />
+  );
+}
+
+const fileToBase64 = async (file, maxWidth = 768, maxHeight = 768) => {
+  const jpegFile = await convertFileToJpeg(file);
   return new Promise((resolve, reject) => {
-    // HEIC files cannot be natively rendered in <img> tags on most browsers.
-    // We use a blob URL to trigger system-level decoding (works on iOS Safari >= 16)
-    // and fall back gracefully. The canvas always re-exports as JPEG for consistency.
-    const processImageSrc = (src, isObjectURL = false) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
       const img = new Image();
       img.onload = () => {
         let width = img.width;
@@ -1269,32 +1426,13 @@ const fileToBase64 = (file, maxWidth = 768, maxHeight = 768) => {
         canvas.height = height;
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, width, height);
-        if (isObjectURL) URL.revokeObjectURL(src);
         resolve(canvas.toDataURL("image/jpeg", 0.75));
       };
-      img.onerror = () => {
-        if (isObjectURL) URL.revokeObjectURL(src);
-        // Last resort: return raw data URL
-        const reader2 = new FileReader();
-        reader2.onload = (ev) => resolve(ev.target.result);
-        reader2.onerror = reject;
-        reader2.readAsDataURL(file);
-      };
-      img.src = src;
+      img.onerror = () => resolve(e.target.result);
+      img.src = e.target.result;
     };
-
-    const isHeic = file.type === "image/heic" || file.name?.toLowerCase().endsWith(".heic");
-
-    if (isHeic) {
-      // Try blob URL approach first (works on iOS Safari which has native HEIC decoding)
-      const objectURL = URL.createObjectURL(file);
-      processImageSrc(objectURL, true);
-    } else {
-      const reader = new FileReader();
-      reader.onload = (e) => processImageSrc(e.target.result, false);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    }
+    reader.onerror = reject;
+    reader.readAsDataURL(jpegFile);
   });
 };
 
@@ -1453,9 +1591,14 @@ function BulkUploader({ onComplete }) {
       // 1. Upload photos to boutique storage and generate optimized base64
       const items = [];
       for (let i = 0; i < uniqueFiles.length; i++) {
-        const file = uniqueFiles[i];
-        setUploadStatus(`Photo ${i + 1} of ${uniqueFiles.length}: Uploading "${file.name}" to boutique storage...`);
+        const rawFile = uniqueFiles[i];
+        setUploadStatus(`Photo ${i + 1} of ${uniqueFiles.length}: Converting & optimizing "${rawFile.name}"...`);
         setUploadProgress({ current: i + 1, total: uniqueFiles.length });
+
+        // Convert HEIC/HEIF and compress photo client-side to standard JPEG (~250KB)
+        const file = await convertFileToJpeg(rawFile);
+
+        setUploadStatus(`Photo ${i + 1} of ${uniqueFiles.length}: Uploading "${file.name}" to boutique storage...`);
 
         const formData = new FormData();
         formData.append("image", file);
@@ -1463,7 +1606,13 @@ function BulkUploader({ onComplete }) {
           method: "POST",
           body: formData,
         });
-        const uploadData = await uploadRes.json();
+        const uploadText = await uploadRes.text();
+        let uploadData = {};
+        try {
+          uploadData = JSON.parse(uploadText);
+        } catch {
+          throw new Error(`Upload server error (${uploadRes.status}): ${uploadText.slice(0, 100)}`);
+        }
         if (!uploadRes.ok) {
           throw new Error(`Upload error for "${file.name}": ${uploadData.error || "Failed"}`);
         }
@@ -1473,7 +1622,7 @@ function BulkUploader({ onComplete }) {
           name: file.name,
           url: uploadData.url,
           base64: base64Data,
-          mimeType: file.type || "image/jpeg",
+          mimeType: "image/jpeg",
         });
       }
 
@@ -1499,17 +1648,19 @@ function BulkUploader({ onComplete }) {
           }),
         });
 
-        if (!batchRes.ok) {
-          const rawErr = await batchRes.text();
-          let parsedErr = rawErr;
-          try {
-            const j = JSON.parse(rawErr);
-            parsedErr = j.error || rawErr;
-          } catch {}
-          throw new Error(`Batch ${batchNum} error: ${parsedErr}`);
+        const batchText = await batchRes.text();
+        let batchData = {};
+        try {
+          batchData = JSON.parse(batchText);
+        } catch {
+          let parsedErr = batchText.slice(0, 150);
+          throw new Error(`Batch ${batchNum} server error (${batchRes.status}): ${parsedErr}`);
         }
 
-        const batchData = await batchRes.json();
+        if (!batchRes.ok) {
+          throw new Error(`Batch ${batchNum} error: ${batchData.error || batchText}`);
+        }
+
         const batchProducts = Array.isArray(batchData?.products) ? batchData.products : [];
         allAiProducts.push(...batchProducts);
       }
@@ -1642,15 +1793,22 @@ function BulkUploader({ onComplete }) {
         );
         setUploadProgress({ current: i + 1, total: allImagesToUpload.length });
 
-        const file = findMatchingImageFile(original, imageFiles);
-        if (file) {
+        const rawFile = findMatchingImageFile(original, imageFiles);
+        if (rawFile) {
+          const file = await convertFileToJpeg(rawFile);
           const formData = new FormData();
           formData.append("image", file);
           const res = await fetch("/api/admin/upload", {
             method: "POST",
             body: formData,
           });
-          const resData = await res.json();
+          const resText = await res.text();
+          let resData = {};
+          try {
+            resData = JSON.parse(resText);
+          } catch {
+            throw new Error(`Upload server error (${res.status}): ${resText.slice(0, 100)}`);
+          }
           if (!res.ok) {
             throw new Error(`Upload error for "${original}": ${resData.error || "Failed"}`);
           }
@@ -2361,26 +2519,6 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
     );
   };
 
-  const handleApplyToAllVariants = () => {
-    if (variants.length <= 1) return;
-    const first = variants[0];
-    setVariants((prev) =>
-      prev.map((v, i) =>
-        i === 0
-          ? v
-          : {
-              ...v,
-              buyPrice: first.buyPrice,
-              fixedPrice: first.fixedPrice,
-              sizes: [...first.sizes],
-              stock: { ...first.stock },
-            }
-      )
-    );
-    setCopiedNotice(true);
-    setTimeout(() => setCopiedNotice(false), 3000);
-  };
-
   const handleAddVariant = () => {
     const nextNum = variants.length + 1;
     const first = variants[0];
@@ -2402,54 +2540,65 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
     setVariants(variants.filter((_, idx) => idx !== indexToRemove));
   };
 
-  const totalQuantityCombined = variants.reduce((sum, v) => {
-    const st = v.stock || {};
-    // Alteration model: use __total__; legacy: sum all
-    return sum + (st.__total__ !== undefined ? Number(st.__total__) || 0 : Object.values(st).reduce((s, q) => s + (Number(q) || 0), 0));
+  const totalQuantityCombined = variants.reduce((sum, v, idx) => {
+    const st = v.stock && (v.stock.__total__ !== undefined || Object.keys(v.stock).length)
+      ? v.stock
+      : (variants[0]?.stock || {});
+    return sum + (st.__total__ !== undefined ? Number(st.__total__) || 0 : Object.values(st).reduce((s, q) => s + (Number(q) || 0), 0) || 1);
   }, 0);
 
   const handlePublish = async () => {
     setErrorMsg("");
-    for (let i = 0; i < variants.length; i++) {
-      const v = variants[i];
-      const bp = Number(v.buyPrice);
-      const fp = Number(v.fixedPrice);
-      const label = variants.length > 1 ? `"${v.colour}" variant` : "this dress";
-      if (v.buyPrice === "" || isNaN(bp) || bp < 0) {
-        setErrorMsg(`⚠️ Buy Price is mandatory for ${label}. Please enter cost price.`);
-        return;
-      }
-      if (v.fixedPrice === "" || isNaN(fp) || fp <= 0) {
-        setErrorMsg(`⚠️ Fixed Price is mandatory for ${label}. Please enter selling price.`);
-        return;
-      }
-      if (!v.sizes || !v.sizes.length) {
-        setErrorMsg(`⚠️ Please select at least one available size for ${label}.`);
-        return;
-      }
-      const vQty = Object.values(v.stock || {}).reduce((s, q) => s + (Number(q) || 0), 0);
-      if (vQty <= 0) {
-        setErrorMsg(`⚠️ Quantity must be at least 1 piece for ${label}.`);
-        return;
-      }
+    const first = variants[0];
+    const baseBp = Number(first.buyPrice);
+    const baseFp = Number(first.fixedPrice);
+
+    if (first.buyPrice === "" || isNaN(baseBp) || baseBp < 0) {
+      setErrorMsg(`⚠️ Buy Price is mandatory for "${first.colour || 'Color 1'}". Please enter cost price.`);
+      return;
     }
+    if (first.fixedPrice === "" || isNaN(baseFp) || baseFp <= 0) {
+      setErrorMsg(`⚠️ Fixed Price is mandatory for "${first.colour || 'Color 1'}". Please enter selling price.`);
+      return;
+    }
+    if (!first.sizes || !first.sizes.length) {
+      setErrorMsg(`⚠️ Please select at least one available size for "${first.colour || 'Color 1'}".`);
+      return;
+    }
+
+    // Auto-inherit Color 1 details for any other variants where fields were not explicitly filled
+    const resolvedVariants = variants.map((v, idx) => {
+      if (idx === 0) return v;
+      const hasBp = v.buyPrice !== "" && !isNaN(Number(v.buyPrice)) && Number(v.buyPrice) >= 0;
+      const hasFp = v.fixedPrice !== "" && !isNaN(Number(v.fixedPrice)) && Number(v.fixedPrice) > 0;
+      const hasSizes = Array.isArray(v.sizes) && v.sizes.length > 0;
+      const vQty = v.stock && (v.stock.__total__ !== undefined ? Number(v.stock.__total__) : Object.values(v.stock).reduce((s, q) => s + (Number(q) || 0), 0));
+      const hasStock = vQty > 0;
+
+      return {
+        ...v,
+        buyPrice: hasBp ? v.buyPrice : first.buyPrice,
+        fixedPrice: hasFp ? v.fixedPrice : first.fixedPrice,
+        sizes: hasSizes ? v.sizes : [...first.sizes],
+        stock: hasStock ? v.stock : { ...first.stock },
+      };
+    });
 
     setSaving(true);
     try {
       // Alteration model: consolidate sizes (union) and total stock (sum of per-variant __total__)
       const allSizesSet = new Set();
       let totalPhysicalCount = 0;
-      variants.forEach((v) => {
+      resolvedVariants.forEach((v) => {
         (v.sizes || []).forEach((s) => allSizesSet.add(s));
         const st = v.stock || {};
         const cnt = st.__total__ !== undefined ? Number(st.__total__) || 0 : Object.values(st).reduce((s, q) => s + (Number(q) || 0), 0);
-        totalPhysicalCount += cnt;
+        totalPhysicalCount += (cnt > 0 ? cnt : 1);
       });
 
-      const first = variants[0];
       const primaryBuyPrice = Number(first.buyPrice);
       const primaryFixedPrice = Number(first.fixedPrice);
-      const isMultiColor = variants.length > 1;
+      const isMultiColor = resolvedVariants.length > 1;
 
       // Store consolidated stock as { __total__: N } at product level
       const consolidatedStock = { __total__: totalPhysicalCount };
@@ -2462,10 +2611,10 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
         sizes: Array.from(allSizesSet),
         stock: consolidatedStock,
         colours: isMultiColor
-          ? variants.map((v) => v.colour)
+          ? resolvedVariants.map((v) => v.colour)
           : (first.colour && first.colour !== "Standard" ? [first.colour] : (rawColours.length ? rawColours : [])),
         colorVariants: isMultiColor
-          ? variants.map((v) => ({
+          ? resolvedVariants.map((v) => ({
               ...v,
               buyPrice: Number(v.buyPrice),
               fixedPrice: Number(v.fixedPrice),
@@ -2502,13 +2651,9 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
             onClick={() => setLightboxOpen(true)}
             title="Click to view enlarged image"
           >
-            <img
+            <SafeImage
               src={imagesList[activeImgIndex] || imagesList[0] || "/placeholder.jpg"}
               alt={product.name}
-              onError={(e) => {
-                e.target.src =
-                  "data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%2280%22%20height%3D%22100%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Crect%20fill%3D%22%23eee%22%20width%3D%2280%22%20height%3D%22100%22%2F%3E%3Ctext%20fill%3D%22%23aaa%22%20font-size%3D%2211%22%20x%3D%2250%25%22%20y%3D%2250%25%22%20text-anchor%3D%22middle%22%3ENo%20Img%3C%2Ftext%3E%3C%2Fsvg%3E";
-              }}
             />
             <span className="pending-zoom-badge">🔍 Zoom</span>
             {imagesList.length > 1 && (
@@ -2528,7 +2673,7 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
                   onClick={() => setActiveImgIndex(idx)}
                   title={`Photo ${idx + 1}`}
                 >
-                  <img src={img} alt={`Thumb ${idx + 1}`} />
+                  <SafeImage src={img} alt={`Thumb ${idx + 1}`} />
                 </button>
               ))}
             </div>
@@ -2588,18 +2733,10 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
                   👗 Dress Variants &amp; Pricing ({variants.length} Colors):
                 </h4>
                 <span className="variants-subtitle">
-                  Click a color thumbnail below to edit its pricing &amp; sizes.
+                  Click a color thumbnail below to edit. If left blank, details from <strong>"{variants[0].colour}"</strong> will be automatically applied to all colors!
                 </span>
               </div>
               <div className="variants-toolbar-actions">
-                <button
-                  type="button"
-                  className="button-secondary apply-all-btn"
-                  onClick={handleApplyToAllVariants}
-                  title="Copies price, sizes, and quantities from Color 1 to all other colors"
-                >
-                  ⚡ Use Details for All Colors
-                </button>
                 <button
                   type="button"
                   className="text-button add-variant-btn"
@@ -2609,12 +2746,6 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
                 </button>
               </div>
             </div>
-
-            {copiedNotice && (
-              <div className="apply-all-alert">
-                ✓ Copied Buy Price, Fixed Price, Sizes, and Count from <b>"{variants[0].colour}"</b> to all colors!
-              </div>
-            )}
 
             {/* Color Thumbnail Switcher */}
             <div className="variant-thumb-switcher">
@@ -2626,10 +2757,9 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
                   onClick={() => setActiveVariantIdx(idx)}
                   title={`Edit ${variant.colour} variant`}
                 >
-                  <img
+                  <SafeImage
                     src={variant.image || imagesList[idx] || imagesList[0] || ""}
                     alt={variant.colour}
-                    onError={(e) => { e.target.src = "data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%2260%22%20height%3D%2275%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Crect%20fill%3D%22%23eee%22%20width%3D%2260%22%20height%3D%2275%22%2F%3E%3C%2Fsvg%3E"; }}
                   />
                   <span className="variant-thumb-label">{variant.colour}</span>
                   {idx === activeVariantIdx && <span className="variant-thumb-active-dot" />}
@@ -2651,35 +2781,39 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
                       placeholder="e.g. Ruby Red, Mustard Yellow..."
                     />
                   </div>
-                  <button
-                    type="button"
-                    className="text-button remove-variant-btn"
-                    onClick={() => { handleRemoveVariant(idx); setActiveVariantIdx(Math.max(0, idx - 1)); }}
-                    title="Remove this color variant"
-                  >
-                    ✕ Remove
-                  </button>
+                  {idx > 0 && (
+                    <button
+                      type="button"
+                      className="text-button remove-variant-btn"
+                      onClick={() => { handleRemoveVariant(idx); setActiveVariantIdx(Math.max(0, idx - 1)); }}
+                      title="Remove this color variant"
+                    >
+                      ✕ Remove
+                    </button>
+                  )}
                 </div>
 
                 <div className="pending-fields-grid">
                   <div className="pending-field-group">
                     <label>
-                      Buy Price (₹) <span className="mandatory-star">*</span>
-                      <span className="helper-txt">(Cost price - Mandatory)</span>
+                      Buy Price (₹) {idx === 0 ? <span className="mandatory-star">*</span> : <span className="helper-txt">(Optional - auto from Color 1)</span>}
                     </label>
                     <input
-                      type="number" min="0" placeholder="e.g. 1500"
+                      type="number"
+                      min="0"
+                      placeholder={idx === 0 ? "e.g. 1500" : (variants[0].buyPrice ? `Auto: ₹${variants[0].buyPrice}` : "e.g. 1500")}
                       value={variant.buyPrice}
                       onChange={(e) => handleUpdateVariant(idx, "buyPrice", e.target.value)}
                     />
                   </div>
                   <div className="pending-field-group">
                     <label>
-                      Fixed Price (₹) <span className="mandatory-star">*</span>
-                      <span className="helper-txt">(Selling price - Mandatory)</span>
+                      Fixed Price (₹) {idx === 0 ? <span className="mandatory-star">*</span> : <span className="helper-txt">(Optional - auto from Color 1)</span>}
                     </label>
                     <input
-                      type="number" min="0" placeholder="e.g. 2990"
+                      type="number"
+                      min="0"
+                      placeholder={idx === 0 ? "e.g. 2990" : (variants[0].fixedPrice ? `Auto: ₹${variants[0].fixedPrice}` : "e.g. 2990")}
                       value={variant.fixedPrice}
                       onChange={(e) => handleUpdateVariant(idx, "fixedPrice", e.target.value)}
                     />
@@ -2688,8 +2822,8 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
 
                 <div className="pending-size-section">
                   <SizeStockSelector
-                    selectedSizes={variant.sizes || []}
-                    stock={variant.stock || {}}
+                    selectedSizes={variant.sizes?.length ? variant.sizes : (idx > 0 ? (variants[0].sizes || []) : [])}
+                    stock={variant.stock && Object.keys(variant.stock).length ? variant.stock : (idx > 0 ? (variants[0].stock || {}) : {})}
                     onChange={(newSizes, newStock) => {
                       handleUpdateVariant(idx, "sizes", newSizes);
                       handleUpdateVariant(idx, "stock", newStock);
@@ -2854,6 +2988,7 @@ function Admin() {
   const [adminSearch, setAdminSearch] = useState("");
   const [adminQueue, setAdminQueue] = useState(null); // array of items or null
   const [queueIndex, setQueueIndex] = useState(0);
+  const [editActiveVariantIdx, setEditActiveVariantIdx] = useState(0);
   const navigate = useNavigate();
 
   const load = (targetTab) =>
@@ -2959,6 +3094,42 @@ function Admin() {
       ? draft.colours.split(",").map((c) => c.trim()).filter(Boolean)
       : [];
 
+    let finalColorVariants = [];
+    if (Array.isArray(draft.colorVariants) && draft.colorVariants.length > 1) {
+      const first = draft.colorVariants[0];
+      const baseBp = Number(first.buyPrice) || buyPriceNum;
+      const baseFp = Number(first.fixedPrice) || fixedPriceNum;
+      const baseSizes = Array.isArray(first.sizes) && first.sizes.length ? first.sizes : sizesList;
+      const baseStock = first.stock && typeof first.stock === "object" ? first.stock : stockObj;
+
+      finalColorVariants = draft.colorVariants.map((v, idx) => {
+        if (idx === 0) {
+          return {
+            ...v,
+            buyPrice: baseBp,
+            fixedPrice: baseFp,
+            price: baseFp,
+            sizes: baseSizes,
+            stock: baseStock,
+          };
+        }
+        const hasBp = v.buyPrice !== "" && !isNaN(Number(v.buyPrice)) && Number(v.buyPrice) >= 0;
+        const hasFp = v.fixedPrice !== "" && !isNaN(Number(v.fixedPrice)) && Number(v.fixedPrice) > 0;
+        const hasSizes = Array.isArray(v.sizes) && v.sizes.length > 0;
+        const vQty = v.stock && (v.stock.__total__ !== undefined ? Number(v.stock.__total__) : Object.values(v.stock).reduce((s, q) => s + (Number(q) || 0), 0));
+        const hasStock = vQty > 0;
+
+        return {
+          ...v,
+          buyPrice: hasBp ? Number(v.buyPrice) : baseBp,
+          fixedPrice: hasFp ? Number(v.fixedPrice) : baseFp,
+          price: hasFp ? Number(v.fixedPrice) : baseFp,
+          sizes: hasSizes ? v.sizes : baseSizes,
+          stock: hasStock ? v.stock : baseStock,
+        };
+      });
+    }
+
     try {
       await api("admin/products", {
         method: editing ? "PUT" : "POST",
@@ -2973,7 +3144,8 @@ function Admin() {
           image: imagesList[0] || "",
           images: imagesList,
           sizes: sizesList,
-          colours: coloursList,
+          colours: finalColorVariants.length > 1 ? finalColorVariants.map((v) => v.colour) : coloursList,
+          colorVariants: finalColorVariants,
           stock: stockObj,
         }),
       });
@@ -3011,6 +3183,7 @@ function Admin() {
     setActiveTab("single");
     setAdminQueue(null);
     setQueueIndex(0);
+    setEditActiveVariantIdx(0);
     const imagesList = product.images?.length
       ? product.images
       : product.image
@@ -3025,6 +3198,31 @@ function Admin() {
 
     const stockObj = typeof product.stock === "object" && product.stock !== null ? product.stock : {};
 
+    const rawColours = Array.isArray(product.colours)
+      ? product.colours
+      : (typeof product.colours === "string" ? product.colours.split(",").map((c) => c.trim()).filter(Boolean) : []);
+
+    let initVariants = [];
+    if (Array.isArray(product.colorVariants) && product.colorVariants.length > 0) {
+      initVariants = product.colorVariants.map((v, i) => ({
+        colour: v.colour || rawColours[i] || `Color ${i + 1}`,
+        image: v.image || imagesList[i] || imagesList[0] || "",
+        buyPrice: v.buyPrice !== undefined && v.buyPrice !== null && v.buyPrice !== 0 ? String(v.buyPrice) : (product.buyPrice ? String(product.buyPrice) : ""),
+        fixedPrice: v.fixedPrice || v.price ? String(v.fixedPrice || v.price) : (product.fixedPrice || product.price ? String(product.fixedPrice || product.price) : ""),
+        sizes: Array.isArray(v.sizes) && v.sizes.length ? v.sizes : sizesList,
+        stock: v.stock && typeof v.stock === "object" ? v.stock : stockObj,
+      }));
+    } else if (rawColours.length > 1) {
+      initVariants = rawColours.map((colour, i) => ({
+        colour,
+        image: imagesList[i] || imagesList[0] || "",
+        buyPrice: product.buyPrice ? String(product.buyPrice) : "",
+        fixedPrice: product.fixedPrice || product.price ? String(product.fixedPrice || product.price) : "",
+        sizes: sizesList,
+        stock: stockObj,
+      }));
+    }
+
     setEditing(product);
     setDraft({
       ...product,
@@ -3033,7 +3231,8 @@ function Admin() {
       images: imagesList,
       image: imagesList[0] || "",
       sizes: sizesList,
-      colours: Array.isArray(product.colours) ? product.colours.join(", ") : (product.colours || ""),
+      colours: rawColours.join(", "),
+      colorVariants: initVariants,
       stock: stockObj,
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -3119,7 +3318,7 @@ function Admin() {
           <button
             type="button"
             className="button excel-export-btn"
-            onClick={() => exportInventoryToExcel(products)}
+            onClick={() => exportInventoryToExcel(liveProducts)}
           >
             📊 Download Excel Report
           </button>
@@ -3267,57 +3466,242 @@ function Admin() {
             </div>
           </label>
 
-          {/* Pricing Fields: BUY PRICE & FIXED PRICE */}
-          <label>
-            Buy Price (₹) <span className="mandatory-star">*</span> <span className="helper-txt">(Cost price per unit - Mandatory)</span>
-            <input
-              required
-              type="number"
-              min="0"
-              placeholder="e.g. 2500"
-              value={draft.buyPrice}
-              onChange={(event) =>
-                setDraft({ ...draft, buyPrice: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            Fixed Price (₹) <span className="mandatory-star">*</span> <span className="helper-txt">(Selling / Retail price - Mandatory)</span>
-            <input
-              required
-              type="number"
-              min="0"
-              placeholder="e.g. 4890"
-              value={draft.fixedPrice}
-              onChange={(event) =>
-                setDraft({ ...draft, fixedPrice: event.target.value, price: event.target.value })
-              }
-            />
-          </label>
+          {/* Multi-Color Variants Switcher in Full Edit Form */}
+          {Array.isArray(draft.colorVariants) && draft.colorVariants.length > 1 ? (
+            <div className="editor-full-field wide full-edit-variants-section">
+              <div className="variants-section-header">
+                <div className="variants-title-wrap">
+                  <h4 className="variants-title">
+                    👗 Dress Variants &amp; Pricing ({draft.colorVariants.length} Colors):
+                  </h4>
+                  <span className="variants-subtitle">
+                    Select a color thumbnail below to enter separate details. If no separate details are entered for other colors, details from <strong>"{draft.colorVariants[0].colour}"</strong> will be used automatically!
+                  </span>
+                </div>
+                <div className="variants-toolbar-actions">
+                  <button
+                    type="button"
+                    className="text-button add-variant-btn"
+                    onClick={() => {
+                      const nextNum = draft.colorVariants.length + 1;
+                      const first = draft.colorVariants[0];
+                      const newVars = [
+                        ...draft.colorVariants,
+                        {
+                          colour: `Color ${nextNum}`,
+                          image: draft.images?.[draft.colorVariants.length] || draft.images?.[0] || "",
+                          buyPrice: "",
+                          fixedPrice: "",
+                          sizes: first ? [...first.sizes] : [],
+                          stock: first ? { ...first.stock } : {},
+                        },
+                      ];
+                      setDraft({
+                        ...draft,
+                        colorVariants: newVars,
+                        colours: newVars.map((v) => v.colour).join(", "),
+                      });
+                    }}
+                  >
+                    + Add Color
+                  </button>
+                </div>
+              </div>
 
-          <label className="wide">
-            Colours (e.g. Coral Pink, Dusty Rose)
-            <input
-              type="text"
-              placeholder="e.g. Coral Pink, Dusty Rose"
-              value={draft.colours}
-              onChange={(event) =>
-                setDraft({ ...draft, colours: event.target.value })
-              }
-            />
-          </label>
+              {/* Color Thumbnail Switcher in Full Edit Form */}
+              <div className="variant-thumb-switcher">
+                {draft.colorVariants.map((v, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    className={`variant-thumb-btn ${idx === editActiveVariantIdx ? "active" : ""}`}
+                    onClick={() => setEditActiveVariantIdx(idx)}
+                    title={`Edit ${v.colour} variant`}
+                  >
+                    <SafeImage
+                      src={v.image || draft.images?.[idx] || draft.images?.[0] || ""}
+                      alt={v.colour}
+                    />
+                    <span className="variant-thumb-label">{v.colour}</span>
+                    {idx === editActiveVariantIdx && <span className="variant-thumb-active-dot" />}
+                  </button>
+                ))}
+              </div>
 
-          <div className="editor-full-field wide">
-            <div className="field-group-header">
-              <span className="field-group-title">Available Sizes &amp; Stock Count <span className="mandatory-star">*</span></span>
-              <span className="field-group-subtitle">Click any size to select (defaults to 1 piece). Adjust quantities with + / - buttons.</span>
+              {/* Active Variant Editor */}
+              {draft.colorVariants.map((v, idx) =>
+                idx !== editActiveVariantIdx ? null : (
+                  <div key={idx} className="variant-editor-card active-variant-card" style={{ marginTop: "1rem" }}>
+                    <div className="variant-card-top">
+                      <div className="variant-label-row">
+                        <span className="variant-pill-tag">Color #{idx + 1}</span>
+                        <input
+                          type="text"
+                          className="variant-name-input"
+                          value={v.colour}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const updated = draft.colorVariants.map((item, i) => (i === idx ? { ...item, colour: val } : item));
+                            setDraft({
+                              ...draft,
+                              colorVariants: updated,
+                              colours: updated.map((item) => item.colour).join(", "),
+                            });
+                          }}
+                          placeholder="e.g. Coral Pink, Dusty Rose"
+                        />
+                      </div>
+                      {idx > 0 && (
+                        <button
+                          type="button"
+                          className="text-button remove-variant-btn"
+                          onClick={() => {
+                            const updated = draft.colorVariants.filter((_, i) => i !== idx);
+                            setDraft({
+                              ...draft,
+                              colorVariants: updated,
+                              colours: updated.map((item) => item.colour).join(", "),
+                            });
+                            setEditActiveVariantIdx(Math.max(0, idx - 1));
+                          }}
+                        >
+                          ✕ Remove
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="pending-fields-grid">
+                      <div className="pending-field-group">
+                        <label>
+                          Buy Price (₹) {idx === 0 ? <span className="mandatory-star">*</span> : <span className="helper-txt">(Optional - auto from Color 1)</span>}
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder={idx === 0 ? "e.g. 2500" : (draft.colorVariants[0].buyPrice ? `Auto: ₹${draft.colorVariants[0].buyPrice}` : "e.g. 2500")}
+                          value={v.buyPrice}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const updated = draft.colorVariants.map((item, i) => (i === idx ? { ...item, buyPrice: val } : item));
+                            setDraft({
+                              ...draft,
+                              buyPrice: idx === 0 ? val : draft.buyPrice,
+                              colorVariants: updated,
+                            });
+                          }}
+                        />
+                      </div>
+                      <div className="pending-field-group">
+                        <label>
+                          Fixed Price (₹) {idx === 0 ? <span className="mandatory-star">*</span> : <span className="helper-txt">(Optional - auto from Color 1)</span>}
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder={idx === 0 ? "e.g. 4890" : (draft.colorVariants[0].fixedPrice ? `Auto: ₹${draft.colorVariants[0].fixedPrice}` : "e.g. 4890")}
+                          value={v.fixedPrice}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const updated = draft.colorVariants.map((item, i) => (i === idx ? { ...item, fixedPrice: val, price: val } : item));
+                            setDraft({
+                              ...draft,
+                              fixedPrice: idx === 0 ? val : draft.fixedPrice,
+                              price: idx === 0 ? val : draft.price,
+                              colorVariants: updated,
+                            });
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pending-size-section">
+                      <SizeStockSelector
+                        selectedSizes={v.sizes?.length ? v.sizes : (idx > 0 ? (draft.colorVariants[0].sizes || []) : (draft.sizes || []))}
+                        stock={v.stock && Object.keys(v.stock).length ? v.stock : (idx > 0 ? (draft.colorVariants[0].stock || {}) : (draft.stock || {}))}
+                        onChange={(newSizes, newStock) => {
+                          const updated = draft.colorVariants.map((item, i) => (i === idx ? { ...item, sizes: newSizes, stock: newStock } : item));
+                          setDraft({
+                            ...draft,
+                            sizes: idx === 0 ? newSizes : draft.sizes,
+                            stock: idx === 0 ? newStock : draft.stock,
+                            colorVariants: updated,
+                          });
+                        }}
+                      />
+                    </div>
+                  </div>
+                )
+              )}
             </div>
-            <SizeStockSelector
-              selectedSizes={Array.isArray(draft.sizes) ? draft.sizes : []}
-              stock={typeof draft.stock === "object" && draft.stock !== null ? draft.stock : {}}
-              onChange={(sizes, stock) => setDraft({ ...draft, sizes, stock })}
-            />
-          </div>
+          ) : (
+            <>
+              {/* Pricing Fields: BUY PRICE & FIXED PRICE */}
+              <label>
+                Buy Price (₹) <span className="mandatory-star">*</span> <span className="helper-txt">(Cost price per unit - Mandatory)</span>
+                <input
+                  required
+                  type="number"
+                  min="0"
+                  placeholder="e.g. 2500"
+                  value={draft.buyPrice}
+                  onChange={(event) =>
+                    setDraft({ ...draft, buyPrice: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                Fixed Price (₹) <span className="mandatory-star">*</span> <span className="helper-txt">(Selling / Retail price - Mandatory)</span>
+                <input
+                  required
+                  type="number"
+                  min="0"
+                  placeholder="e.g. 4890"
+                  value={draft.fixedPrice}
+                  onChange={(event) =>
+                    setDraft({ ...draft, fixedPrice: event.target.value, price: event.target.value })
+                  }
+                />
+              </label>
+
+              <label className="wide">
+                Colours (e.g. Coral Pink, Dusty Rose)
+                <input
+                  type="text"
+                  placeholder="e.g. Coral Pink, Dusty Rose (comma-separated)"
+                  value={draft.colours}
+                  onChange={(event) => {
+                    const val = event.target.value;
+                    const split = val.split(",").map((c) => c.trim()).filter(Boolean);
+                    if (split.length > 1) {
+                      const newVars = split.map((c, i) => ({
+                        colour: c,
+                        image: draft.images?.[i] || draft.images?.[0] || "",
+                        buyPrice: draft.buyPrice || "",
+                        fixedPrice: draft.fixedPrice || "",
+                        sizes: draft.sizes || [],
+                        stock: draft.stock || {},
+                      }));
+                      setDraft({ ...draft, colours: val, colorVariants: newVars });
+                    } else {
+                      setDraft({ ...draft, colours: val });
+                    }
+                  }}
+                />
+              </label>
+
+              <div className="editor-full-field wide">
+                <div className="field-group-header">
+                  <span className="field-group-title">Available Sizes &amp; Stock Count <span className="mandatory-star">*</span></span>
+                  <span className="field-group-subtitle">Click any size to select (defaults to 1 piece). Adjust quantities with + / - buttons.</span>
+                </div>
+                <SizeStockSelector
+                  selectedSizes={Array.isArray(draft.sizes) ? draft.sizes : []}
+                  stock={typeof draft.stock === "object" && draft.stock !== null ? draft.stock : {}}
+                  onChange={(sizes, stock) => setDraft({ ...draft, sizes, stock })}
+                />
+              </div>
+            </>
+          )}
 
           <label className="wide">
             Product Images (Upload multiple photos) <span className="mandatory-star">*</span>
