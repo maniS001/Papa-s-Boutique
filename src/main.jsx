@@ -13,6 +13,15 @@ import JSZip from "jszip";
 import "./styles.css";
 import { whatsappNumber } from "./config";
 
+// ─── FEATURE FLAG CONTROLS ────────────────────────────────────────────────────
+// Set to false to hide tabs/sections from the admin panel
+const SHOW_SINGLE_ITEM_ENTRY = false; // Hide "Single Item Entry" tab
+const SHOW_JSON_IMPORT = false;        // Hide "Import via JSON" method in Bulk Import
+// Default Gemini API Key — set this in localStorage ("papas_gemini_token") on the device
+// to avoid re-entering. Leave as "" here to keep credentials out of source code.
+const DEFAULT_GEMINI_API_KEY = "";
+// ─────────────────────────────────────────────────────────────────────────────
+
 function normalizeImageName(str) {
   if (!str || typeof str !== "string") return "";
   const base = str.split("/").pop().split("\\").pop().toLowerCase();
@@ -838,134 +847,122 @@ function MultiImageUploader({ images = [], onChange }) {
 
 const STANDARD_SIZES = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "Free Size"];
 
+/**
+ * SizeStockSelector — Alteration-Aware Mode
+ *
+ * SEPARATE SECTIONS:
+ *  1. "Available Sizes" — the sizes a customer can ORDER (we alter the dress to fit).
+ *     Multiple sizes can be offered for a SINGLE physical piece.
+ *  2. "Physical Stock Count" — the actual number of physical dress units in hand.
+ *     This is independent of how many sizes are listed.
+ *
+ * onChange(selectedSizes, stock) where stock = { __total__: N }
+ * The stock object only uses the key "__total__" for the physical count.
+ */
 function SizeStockSelector({ selectedSizes = [], stock = {}, onChange }) {
   const [customInput, setCustomInput] = useState("");
 
-  const handleToggle = (size) => {
+  // Physical count is stored in stock.__total__ (or inferred from old-style per-size counts)
+  const physicalCount = (() => {
+    if (stock.__total__ !== undefined) return Number(stock.__total__) || 1;
+    // Legacy: sum of old per-size counts
+    const legacySum = Object.entries(stock)
+      .filter(([k]) => k !== "__total__")
+      .reduce((s, [, q]) => s + (Number(q) || 0), 0);
+    return legacySum > 0 ? legacySum : 1;
+  })();
+
+  const handleToggleSize = (size) => {
     const isSelected = selectedSizes.includes(size);
-    if (isSelected) {
-      const nextSizes = selectedSizes.filter((s) => s !== size);
-      const nextStock = { ...stock };
-      delete nextStock[size];
-      onChange(nextSizes, nextStock);
-    } else {
-      const nextSizes = [...selectedSizes, size];
-      const nextStock = { ...stock, [size]: 1 }; // Default count is 1
-      onChange(nextSizes, nextStock);
-    }
+    const nextSizes = isSelected
+      ? selectedSizes.filter((s) => s !== size)
+      : [...selectedSizes, size];
+    onChange(nextSizes, { __total__: physicalCount });
   };
 
-  const handleQtyChange = (size, val) => {
+  const handleCountChange = (val) => {
     const qty = Math.max(1, parseInt(val, 10) || 1);
-    onChange(selectedSizes, { ...stock, [size]: qty });
+    onChange(selectedSizes, { __total__: qty });
   };
 
   const handleAddCustom = (e) => {
     e.preventDefault();
     const trimmed = customInput.trim();
-    if (!trimmed) return;
-    if (!selectedSizes.includes(trimmed)) {
-      onChange([...selectedSizes, trimmed], { ...stock, [trimmed]: 1 });
-    }
+    if (!trimmed || selectedSizes.includes(trimmed)) { setCustomInput(""); return; }
+    onChange([...selectedSizes, trimmed], { __total__: physicalCount });
     setCustomInput("");
   };
 
   return (
-    <div className="size-stock-card">
-      <div className="size-pill-group">
-        {STANDARD_SIZES.map((size) => {
-          const isSelected = selectedSizes.includes(size);
-          return (
-            <button
-              key={size}
-              type="button"
-              className={`size-pill-btn ${isSelected ? "selected" : ""}`}
-              onClick={() => handleToggle(size)}
-            >
-              <span className="size-check-icon">{isSelected ? "✓" : "+"}</span>
-              <span className="size-label">{size}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="custom-size-adder">
-        <input
-          type="text"
-          placeholder="Custom size (e.g. 4XL, 32, Free Size...)"
-          value={customInput}
-          onChange={(e) => setCustomInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              handleAddCustom(e);
-            }
-          }}
-        />
-        <button
-          type="button"
-          className="text-button"
-          onClick={handleAddCustom}
-        >
-          + Add Size
-        </button>
-      </div>
-
-      {selectedSizes.length > 0 ? (
-        <div className="selected-sizes-stepper-list">
-          <p className="stepper-section-title">
-            Quantity per size (Default is 1):
-          </p>
-          <div className="size-stepper-grid">
-            {selectedSizes.map((size) => {
-              const count = stock[size] !== undefined ? stock[size] : 1;
-              return (
-                <div key={size} className="size-stepper-item">
-                  <span className="size-stepper-badge">{size}</span>
-                  <div className="qty-counter">
-                    <button
-                      type="button"
-                      className="qty-btn"
-                      onClick={() => handleQtyChange(size, count - 1)}
-                    >
-                      -
-                    </button>
-                    <input
-                      type="number"
-                      min="1"
-                      className="qty-num-input"
-                      value={count}
-                      onChange={(e) => handleQtyChange(size, e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      className="qty-btn"
-                      onClick={() => handleQtyChange(size, count + 1)}
-                    >
-                      +
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    className="size-del-btn"
-                    onClick={() => handleToggle(size)}
-                    title={`Remove size ${size}`}
-                  >
-                    ✕
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-          <div className="total-stock-callout">
-            Total Selected Stock: <b>{Object.values(stock).reduce((s, q) => s + (Number(q) || 0), 0)} pieces</b>
-          </div>
+    <div className="size-stock-card alteration-mode">
+      {/* SECTION 1: Available Sizes (for alteration offering) */}
+      <div className="size-section-block">
+        <div className="size-section-header">
+          <span className="size-section-title">👗 Available Sizes <span className="mandatory-star">*</span></span>
+          <span className="size-section-hint">Select all sizes you can offer for this dress (we will alter to fit). Multiple sizes = one price.</span>
         </div>
-      ) : (
-        <p className="size-required-warning">
-          ⚠️ <b>Size is mandatory:</b> Please select at least one size above. Default count is 1.
-        </p>
-      )}
+        <div className="size-pill-group">
+          {STANDARD_SIZES.map((size) => {
+            const isSelected = selectedSizes.includes(size);
+            return (
+              <button
+                key={size}
+                type="button"
+                className={`size-pill-btn ${isSelected ? "selected" : ""}`}
+                onClick={() => handleToggleSize(size)}
+              >
+                <span className="size-check-icon">{isSelected ? "✓" : "+"}</span>
+                <span className="size-label">{size}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="custom-size-adder">
+          <input
+            type="text"
+            placeholder="Custom size (e.g. 4XL, 32, Free Size...)"
+            value={customInput}
+            onChange={(e) => setCustomInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddCustom(e); } }}
+          />
+          <button type="button" className="text-button" onClick={handleAddCustom}>+ Add</button>
+        </div>
+        {selectedSizes.length > 0 ? (
+          <div className="selected-sizes-tags">
+            {selectedSizes.map((s) => (
+              <span key={s} className="selected-size-tag">
+                {s}
+                <button type="button" className="size-tag-remove" onClick={() => handleToggleSize(s)} title={`Remove ${s}`}>✕</button>
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="size-required-warning">⚠️ <b>Size is mandatory:</b> Select at least one available size above.</p>
+        )}
+      </div>
+
+      {/* SECTION 2: Physical Stock Count (units in hand) */}
+      <div className="size-section-block stock-count-block">
+        <div className="size-section-header">
+          <span className="size-section-title">📦 Physical Stock Count <span className="mandatory-star">*</span></span>
+          <span className="size-section-hint">How many physical dresses do you have? (Each piece can be altered to any size above.)</span>
+        </div>
+        <div className="stock-count-row">
+          <button type="button" className="qty-btn" onClick={() => handleCountChange(physicalCount - 1)}>−</button>
+          <input
+            type="number"
+            min="1"
+            className="qty-num-input stock-count-input"
+            value={physicalCount}
+            onChange={(e) => handleCountChange(e.target.value)}
+          />
+          <button type="button" className="qty-btn" onClick={() => handleCountChange(physicalCount + 1)}>+</button>
+          <span className="stock-count-label">piece{physicalCount !== 1 ? "s" : ""} in stock</span>
+        </div>
+        <div className="total-stock-callout">
+          Total: <b>{physicalCount} physical {physicalCount !== 1 ? "pieces" : "piece"}</b> · Can be altered to: <b>{selectedSizes.length > 0 ? selectedSizes.join(", ") : "(no sizes selected)"}</b>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1250,8 +1247,10 @@ const SAMPLE_JSON_DATA = [
 
 const fileToBase64 = (file, maxWidth = 768, maxHeight = 768) => {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
+    // HEIC files cannot be natively rendered in <img> tags on most browsers.
+    // We use a blob URL to trigger system-level decoding (works on iOS Safari >= 16)
+    // and fall back gracefully. The canvas always re-exports as JPEG for consistency.
+    const processImageSrc = (src, isObjectURL = false) => {
       const img = new Image();
       img.onload = () => {
         let width = img.width;
@@ -1270,13 +1269,32 @@ const fileToBase64 = (file, maxWidth = 768, maxHeight = 768) => {
         canvas.height = height;
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, width, height);
+        if (isObjectURL) URL.revokeObjectURL(src);
         resolve(canvas.toDataURL("image/jpeg", 0.75));
       };
-      img.onerror = () => resolve(e.target.result);
-      img.src = e.target.result;
+      img.onerror = () => {
+        if (isObjectURL) URL.revokeObjectURL(src);
+        // Last resort: return raw data URL
+        const reader2 = new FileReader();
+        reader2.onload = (ev) => resolve(ev.target.result);
+        reader2.onerror = reject;
+        reader2.readAsDataURL(file);
+      };
+      img.src = src;
     };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+
+    const isHeic = file.type === "image/heic" || file.name?.toLowerCase().endsWith(".heic");
+
+    if (isHeic) {
+      // Try blob URL approach first (works on iOS Safari which has native HEIC decoding)
+      const objectURL = URL.createObjectURL(file);
+      processImageSrc(objectURL, true);
+    } else {
+      const reader = new FileReader();
+      reader.onload = (e) => processImageSrc(e.target.result, false);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    }
   });
 };
 
@@ -1295,11 +1313,15 @@ function BulkUploader({ onComplete }) {
   const [zipLoading, setZipLoading] = useState(false);
 
   // AI Vision Direct import state (Supports Google Gemini & Hugging Face)
-  const [aiToken, setAiToken] = useState(() => localStorage.getItem("papas_ai_token") || localStorage.getItem("papas_gemini_token") || localStorage.getItem("papas_hf_token") || "");
+  // Always default to Gemini with the pre-filled API key
+  const [aiToken, setAiToken] = useState(() => {
+    const saved = localStorage.getItem("papas_ai_token") || localStorage.getItem("papas_gemini_token") || "";
+    return saved || DEFAULT_GEMINI_API_KEY;
+  });
   const [aiProvider, setAiProvider] = useState(() => {
     const saved = localStorage.getItem("papas_ai_token") || "";
     if (saved.startsWith("hf_")) return "hf";
-    return "gemini"; // Default to Gemini: 100% free forever, no serverless provider restrictions
+    return "gemini";
   });
   const [aiModel, setAiModel] = useState(() => {
     const saved = localStorage.getItem("papas_ai_token") || "";
@@ -1713,13 +1735,15 @@ function BulkUploader({ onComplete }) {
           ✨ Auto-Analyze with AI Vision (Direct / No JSON)
           <span className="badge-new-addon">Add-on</span>
         </button>
-        <button
-          type="button"
-          className={`bulk-method-btn ${bulkMethod === "json" ? "active" : ""}`}
-          onClick={() => setBulkMethod("json")}
-        >
-          ⚡ Import via JSON / ZIP Prompt (Standard Method)
-        </button>
+        {SHOW_JSON_IMPORT && (
+          <button
+            type="button"
+            className={`bulk-method-btn ${bulkMethod === "json" ? "active" : ""}`}
+            onClick={() => setBulkMethod("json")}
+          >
+            ⚡ Import via JSON / ZIP Prompt (Standard Method)
+          </button>
+        )}
       </div>
 
       <div className="bulk-top-header">
@@ -2285,6 +2309,18 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
     ? product.colours.split(",").map((c) => c.trim()).filter(Boolean)
     : [];
 
+  // Active color variant index (collapsible: only one form shown at a time)
+  const [activeVariantIdx, setActiveVariantIdx] = useState(0);
+
+  // Normalize stock to always use __total__ format (alteration model)
+  const normalizeStock = (s, sizes) => {
+    if (!s || typeof s !== "object") return { __total__: 1 };
+    if (s.__total__ !== undefined) return s;
+    // Migrate old per-size stock to __total__
+    const total = Object.values(s).reduce((a, v) => a + (Number(v) || 0), 0);
+    return { __total__: total > 0 ? total : 1 };
+  };
+
   // Initialize variants
   const [variants, setVariants] = useState(() => {
     if (Array.isArray(product.colorVariants) && product.colorVariants.length > 0) {
@@ -2294,7 +2330,7 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
         buyPrice: v.buyPrice !== undefined && v.buyPrice !== null && v.buyPrice !== 0 ? String(v.buyPrice) : (product.buyPrice ? String(product.buyPrice) : ""),
         fixedPrice: v.fixedPrice || v.price ? String(v.fixedPrice || v.price) : (product.fixedPrice || product.price ? String(product.fixedPrice || product.price) : ""),
         sizes: Array.isArray(v.sizes) && v.sizes.length ? v.sizes : (Array.isArray(product.sizes) ? product.sizes : []),
-        stock: v.stock && typeof v.stock === "object" ? v.stock : (product.stock && typeof product.stock === "object" ? product.stock : {}),
+        stock: normalizeStock(v.stock && typeof v.stock === "object" ? v.stock : (product.stock && typeof product.stock === "object" ? product.stock : {})),
       }));
     }
     if (rawColours.length > 1) {
@@ -2304,7 +2340,7 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
         buyPrice: product.buyPrice ? String(product.buyPrice) : "",
         fixedPrice: product.fixedPrice || product.price ? String(product.fixedPrice || product.price) : "",
         sizes: Array.isArray(product.sizes) ? product.sizes : [],
-        stock: product.stock && typeof product.stock === "object" ? product.stock : {},
+        stock: normalizeStock(product.stock && typeof product.stock === "object" ? product.stock : {}),
       }));
     }
     return [
@@ -2314,7 +2350,7 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
         buyPrice: product.buyPrice ? String(product.buyPrice) : "",
         fixedPrice: product.fixedPrice || product.price ? String(product.fixedPrice || product.price) : "",
         sizes: Array.isArray(product.sizes) ? product.sizes : [],
-        stock: product.stock && typeof product.stock === "object" ? product.stock : {},
+        stock: normalizeStock(product.stock && typeof product.stock === "object" ? product.stock : {}),
       },
     ];
   });
@@ -2367,7 +2403,9 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
   };
 
   const totalQuantityCombined = variants.reduce((sum, v) => {
-    return sum + Object.values(v.stock || {}).reduce((s, q) => s + (Number(q) || 0), 0);
+    const st = v.stock || {};
+    // Alteration model: use __total__; legacy: sum all
+    return sum + (st.__total__ !== undefined ? Number(st.__total__) || 0 : Object.values(st).reduce((s, q) => s + (Number(q) || 0), 0));
   }, 0);
 
   const handlePublish = async () => {
@@ -2398,19 +2436,23 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
 
     setSaving(true);
     try {
-      const consolidatedStock = {};
+      // Alteration model: consolidate sizes (union) and total stock (sum of per-variant __total__)
       const allSizesSet = new Set();
+      let totalPhysicalCount = 0;
       variants.forEach((v) => {
         (v.sizes || []).forEach((s) => allSizesSet.add(s));
-        Object.entries(v.stock || {}).forEach(([s, q]) => {
-          consolidatedStock[s] = (consolidatedStock[s] || 0) + (Number(q) || 0);
-        });
+        const st = v.stock || {};
+        const cnt = st.__total__ !== undefined ? Number(st.__total__) || 0 : Object.values(st).reduce((s, q) => s + (Number(q) || 0), 0);
+        totalPhysicalCount += cnt;
       });
 
       const first = variants[0];
       const primaryBuyPrice = Number(first.buyPrice);
       const primaryFixedPrice = Number(first.fixedPrice);
       const isMultiColor = variants.length > 1;
+
+      // Store consolidated stock as { __total__: N } at product level
+      const consolidatedStock = { __total__: totalPhysicalCount };
 
       const payload = {
         ...product,
@@ -2428,6 +2470,7 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
               buyPrice: Number(v.buyPrice),
               fixedPrice: Number(v.fixedPrice),
               price: Number(v.fixedPrice),
+              stock: v.stock.__total__ !== undefined ? v.stock : { __total__: Object.values(v.stock).reduce((s, q) => s + (Number(q) || 0), 0) },
             }))
           : [],
         pending: false,
@@ -2538,14 +2581,14 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
       <div className="pending-card-body">
         {variants.length > 1 ? (
           <>
-            {/* Multi-Color Variants Toolbar & Section */}
+            {/* Multi-Color Variants — Collapsible: click thumbnail to activate */}
             <div className="variants-section-header">
               <div className="variants-title-wrap">
                 <h4 className="variants-title">
                   👗 Dress Variants &amp; Pricing ({variants.length} Colors):
                 </h4>
                 <span className="variants-subtitle">
-                  Enter Buy Price, Fixed Price, and pick Sizes for each dress color.
+                  Click a color thumbnail below to edit its pricing &amp; sizes.
                 </span>
               </div>
               <div className="variants-toolbar-actions">
@@ -2562,121 +2605,122 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
                   className="text-button add-variant-btn"
                   onClick={handleAddVariant}
                 >
-                  + Add Color Variant
+                  + Add Color
                 </button>
               </div>
             </div>
 
             {copiedNotice && (
               <div className="apply-all-alert">
-                ✓ Copied Buy Price, Fixed Price, Sizes, and Stock from <b>"{variants[0].colour}"</b> to all other colors!
+                ✓ Copied Buy Price, Fixed Price, Sizes, and Count from <b>"{variants[0].colour}"</b> to all colors!
               </div>
             )}
 
-            {/* Variants List */}
-            <div className="variants-cards-container">
+            {/* Color Thumbnail Switcher */}
+            <div className="variant-thumb-switcher">
               {variants.map((variant, idx) => (
-                <div key={idx} className="variant-editor-card">
-                  <div className="variant-card-top">
-                    <div className="variant-label-row">
-                      <span className="variant-pill-tag">Color #{idx + 1}</span>
-                      <input
-                        type="text"
-                        className="variant-name-input"
-                        value={variant.colour}
-                        onChange={(e) => handleUpdateVariant(idx, "colour", e.target.value)}
-                        placeholder="e.g. Ruby Red, Mustard Yellow..."
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      className="text-button remove-variant-btn"
-                      onClick={() => handleRemoveVariant(idx)}
-                      title="Remove this color variant"
-                    >
-                      ✕ Remove Color
-                    </button>
+                <button
+                  key={idx}
+                  type="button"
+                  className={`variant-thumb-btn ${idx === activeVariantIdx ? "active" : ""}`}
+                  onClick={() => setActiveVariantIdx(idx)}
+                  title={`Edit ${variant.colour} variant`}
+                >
+                  <img
+                    src={variant.image || imagesList[idx] || imagesList[0] || ""}
+                    alt={variant.colour}
+                    onError={(e) => { e.target.src = "data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%2260%22%20height%3D%2275%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Crect%20fill%3D%22%23eee%22%20width%3D%2260%22%20height%3D%2275%22%2F%3E%3C%2Fsvg%3E"; }}
+                  />
+                  <span className="variant-thumb-label">{variant.colour}</span>
+                  {idx === activeVariantIdx && <span className="variant-thumb-active-dot" />}
+                </button>
+              ))}
+            </div>
+
+            {/* Active Variant Editor (only one shown at a time) */}
+            {variants.map((variant, idx) => idx !== activeVariantIdx ? null : (
+              <div key={idx} className="variant-editor-card active-variant-card">
+                <div className="variant-card-top">
+                  <div className="variant-label-row">
+                    <span className="variant-pill-tag">Color #{idx + 1}</span>
+                    <input
+                      type="text"
+                      className="variant-name-input"
+                      value={variant.colour}
+                      onChange={(e) => handleUpdateVariant(idx, "colour", e.target.value)}
+                      placeholder="e.g. Ruby Red, Mustard Yellow..."
+                    />
                   </div>
+                  <button
+                    type="button"
+                    className="text-button remove-variant-btn"
+                    onClick={() => { handleRemoveVariant(idx); setActiveVariantIdx(Math.max(0, idx - 1)); }}
+                    title="Remove this color variant"
+                  >
+                    ✕ Remove
+                  </button>
+                </div>
 
-                  <div className="pending-fields-grid">
-                    <div className="pending-field-group">
-                      <label>
-                        Buy Price (₹) <span className="mandatory-star">*</span>
-                        <span className="helper-txt">(Cost price per unit - Mandatory)</span>
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        placeholder="e.g. 1500"
-                        value={variant.buyPrice}
-                        onChange={(e) => handleUpdateVariant(idx, "buyPrice", e.target.value)}
-                      />
-                    </div>
-
-                    <div className="pending-field-group">
-                      <label>
-                        Fixed Price (₹) <span className="mandatory-star">*</span>
-                        <span className="helper-txt">(Selling / Retail price - Mandatory)</span>
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        placeholder="e.g. 2990"
-                        value={variant.fixedPrice}
-                        onChange={(e) => handleUpdateVariant(idx, "fixedPrice", e.target.value)}
-                      />
-                    </div>
+                <div className="pending-fields-grid">
+                  <div className="pending-field-group">
+                    <label>
+                      Buy Price (₹) <span className="mandatory-star">*</span>
+                      <span className="helper-txt">(Cost price - Mandatory)</span>
+                    </label>
+                    <input
+                      type="number" min="0" placeholder="e.g. 1500"
+                      value={variant.buyPrice}
+                      onChange={(e) => handleUpdateVariant(idx, "buyPrice", e.target.value)}
+                    />
                   </div>
-
-                  <div className="pending-size-section">
-                    <div className="field-group-header">
-                      <span className="field-group-title">
-                        Available Sizes &amp; Stock Count for "{variant.colour}" <span className="mandatory-star">*</span>
-                      </span>
-                      <span className="field-group-subtitle">
-                        Click any size to select (defaults to 1 piece). Adjust quantities with + / - buttons.
-                      </span>
-                    </div>
-                    <SizeStockSelector
-                      selectedSizes={variant.sizes || []}
-                      stock={variant.stock || {}}
-                      onChange={(newSizes, newStock) => {
-                        handleUpdateVariant(idx, "sizes", newSizes);
-                        handleUpdateVariant(idx, "stock", newStock);
-                      }}
+                  <div className="pending-field-group">
+                    <label>
+                      Fixed Price (₹) <span className="mandatory-star">*</span>
+                      <span className="helper-txt">(Selling price - Mandatory)</span>
+                    </label>
+                    <input
+                      type="number" min="0" placeholder="e.g. 2990"
+                      value={variant.fixedPrice}
+                      onChange={(e) => handleUpdateVariant(idx, "fixedPrice", e.target.value)}
                     />
                   </div>
                 </div>
-              ))}
-            </div>
+
+                <div className="pending-size-section">
+                  <SizeStockSelector
+                    selectedSizes={variant.sizes || []}
+                    stock={variant.stock || {}}
+                    onChange={(newSizes, newStock) => {
+                      handleUpdateVariant(idx, "sizes", newSizes);
+                      handleUpdateVariant(idx, "stock", newStock);
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
           </>
         ) : (
-          /* Single Dress Pricing & Stock (Only 1 price entry needed!) */
+          /* Single Dress Pricing & Stock (Alteration model) */
           <div className="single-dress-editor">
             <div className="pending-fields-grid">
               <div className="pending-field-group">
                 <label>
                   Buy Price (₹) <span className="mandatory-star">*</span>
-                  <span className="helper-txt">(Cost price per unit - Mandatory)</span>
+                  <span className="helper-txt">(Cost price - Mandatory)</span>
                 </label>
                 <input
-                  type="number"
-                  min="0"
-                  placeholder="e.g. 1500"
+                  type="number" min="0" placeholder="e.g. 1500"
                   value={variants[0].buyPrice}
                   onChange={(e) => handleUpdateVariant(0, "buyPrice", e.target.value)}
                 />
               </div>
-
               <div className="pending-field-group">
                 <label>
                   Fixed Price (₹) <span className="mandatory-star">*</span>
-                  <span className="helper-txt">(Selling / Retail price - Mandatory)</span>
+                  <span className="helper-txt">(Selling price - Mandatory)</span>
                 </label>
                 <input
-                  type="number"
-                  min="0"
-                  placeholder="e.g. 2990"
+                  type="number" min="0" placeholder="e.g. 2990"
                   value={variants[0].fixedPrice}
                   onChange={(e) => handleUpdateVariant(0, "fixedPrice", e.target.value)}
                 />
@@ -2684,14 +2728,6 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
             </div>
 
             <div className="pending-size-section">
-              <div className="field-group-header">
-                <span className="field-group-title">
-                  Available Sizes &amp; Stock Count <span className="mandatory-star">*</span>
-                </span>
-                <span className="field-group-subtitle">
-                  Click any size to select (defaults to 1 piece). Adjust quantities with + / - buttons.
-                </span>
-              </div>
               <SizeStockSelector
                 selectedSizes={variants[0].sizes || []}
                 stock={variants[0].stock || {}}
@@ -2703,11 +2739,7 @@ function PendingItemCard({ product, onSaveSuccess, onEditFull, onDelete }) {
             </div>
 
             <div className="single-variant-footer-action">
-              <button
-                type="button"
-                className="text-button add-variant-btn"
-                onClick={handleAddVariant}
-              >
+              <button type="button" className="text-button add-variant-btn" onClick={handleAddVariant}>
                 + Add Another Color Variant
               </button>
             </div>
@@ -3110,28 +3142,30 @@ function Admin() {
           className={`admin-tab-btn ${activeTab === "live" ? "active" : ""}`}
           onClick={() => setActiveTab("live")}
         >
-          👗 Live Store Inventory ({liveProducts.length})
+          👗 Live Store ({liveProducts.length})
         </button>
-        <button
-          type="button"
-          className={`admin-tab-btn ${activeTab === "single" ? "active" : ""}`}
-          onClick={() => setActiveTab("single")}
-        >
-          📝 {editing ? "Edit Item Form" : "Single Item Entry"}
-        </button>
+        {(SHOW_SINGLE_ITEM_ENTRY || editing) && (
+          <button
+            type="button"
+            className={`admin-tab-btn ${activeTab === "single" ? "active" : ""}`}
+            onClick={() => setActiveTab("single")}
+          >
+            📝 {editing ? "Edit Item Form" : "Single Item Entry"}
+          </button>
+        )}
         <button
           type="button"
           className={`admin-tab-btn ${activeTab === "bulk" ? "active" : ""}`}
           onClick={() => setActiveTab("bulk")}
         >
-          ⚡ Bulk Import (AI / JSON)
+          ⚡ Bulk Import (AI)
         </button>
         <button
           type="button"
           className={`admin-tab-btn pending-tab ${activeTab === "pending" ? "active" : ""}`}
           onClick={() => setActiveTab("pending")}
         >
-          ⏳ Pending Items ({pendingProducts.length})
+          ⏳ Pending ({pendingProducts.length})
           {pendingProducts.length > 0 && (
             <span className="tab-pending-badge">{pendingProducts.length}</span>
           )}
