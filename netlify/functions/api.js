@@ -5,9 +5,9 @@ const PRODUCTS_KEY = 'catalogue.json'
 const store = () => getStore({ name: 'boutique-data', consistency: 'strong' })
 const imageStore = () => getStore({ name: 'boutique-images', consistency: 'strong' })
 const seedProducts = [
-  { id: 'rose-midi', slug: 'rose-garden-midi', name: 'Rose Garden Midi', collection: 'Summer Edit', price: 4890, description: 'A softly structured midi dress in a rose garden print, finished with a square neckline and a flowing skirt.', sizes: ['XS', 'S', 'M', 'L'], colours: ['Rose', 'Ivory'], stock: { XS: 3, S: 7, M: 5, L: 2 }, image: 'https://images.unsplash.com/photo-1566174053879-31528523f8ae?auto=format&fit=crop&w=1000&q=85', featured: true, published: true },
-  { id: 'saffron-silk', slug: 'saffron-silk-slip', name: 'Saffron Silk Slip', collection: 'Occasion', price: 7290, description: 'An elegant bias-cut satin slip dress with a low back and delicate adjustable straps.', sizes: ['S', 'M', 'L'], colours: ['Saffron'], stock: { S: 4, M: 6, L: 3 }, image: 'https://images.unsplash.com/photo-1595777457583-95e059d581b8?auto=format&fit=crop&w=1000&q=85', featured: true, published: true },
-  { id: 'linen-wrap', slug: 'linen-wrap-dress', name: 'Linen Wrap Dress', collection: 'Everyday Ease', price: 3990, description: 'Breathable linen with a flattering adjustable wrap waist for effortless days out.', sizes: ['XS', 'S', 'M', 'L', 'XL'], colours: ['Oat', 'Terracotta'], stock: { XS: 4, S: 8, M: 8, L: 4, XL: 2 }, image: 'https://images.unsplash.com/photo-1509631179647-0177331693ae?auto=format&fit=crop&w=1000&q=85', featured: false, published: true },
+  { id: 'rose-midi', slug: 'rose-garden-midi', name: 'Rose Garden Midi', collection: 'Kurtis', price: 4890, description: 'A softly structured midi dress in a rose garden print, finished with a square neckline and a flowing skirt.', sizes: ['XS', 'S', 'M', 'L'], colours: ['Rose', 'Ivory'], stock: { XS: 3, S: 7, M: 5, L: 2 }, image: 'https://images.unsplash.com/photo-1566174053879-31528523f8ae?auto=format&fit=crop&w=1000&q=85', featured: true, published: true },
+  { id: 'saffron-silk', slug: 'saffron-silk-slip', name: 'Saffron Silk Slip', collection: 'Salwar Suits', price: 7290, description: 'An elegant bias-cut satin slip dress with a low back and delicate adjustable straps.', sizes: ['S', 'M', 'L'], colours: ['Saffron'], stock: { S: 4, M: 6, L: 3 }, image: 'https://images.unsplash.com/photo-1595777457583-95e059d581b8?auto=format&fit=crop&w=1000&q=85', featured: true, published: true },
+  { id: 'linen-wrap', slug: 'linen-wrap-dress', name: 'Linen Wrap Dress', collection: 'Kurtis', price: 3990, description: 'Breathable linen with a flattering adjustable wrap waist for effortless days out.', sizes: ['XS', 'S', 'M', 'L', 'XL'], colours: ['Oat', 'Terracotta'], stock: { XS: 4, S: 8, M: 8, L: 4, XL: 2 }, image: 'https://images.unsplash.com/photo-1509631179647-0177331693ae?auto=format&fit=crop&w=1000&q=85', featured: false, published: true },
 ]
 const ALLOWED_TYPES = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/heic': 'heic', 'image/heif': 'heic' }
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024 // 8 MB
@@ -22,6 +22,19 @@ const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(b
   }
 })
 const slugify = (value) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+const normalizeCategory = (collection = '', name = '', description = '') => {
+  const combined = `${collection || ''} ${name || ''} ${description || ''}`.toLowerCase()
+  if (combined.includes('palazzo') || combined.includes('plazo') || combined.includes('pant') || combined.includes('trouser')) return 'Palazzo'
+  if (combined.includes('legging') || combined.includes('churidar') || combined.includes('tights')) return 'Leggings'
+  if (combined.includes('dupatta') || combined.includes('shawl') || combined.includes('stole') || combined.includes('scarf')) return 'Dupatta'
+  if (combined.includes('saree') || combined.includes('sari')) return 'Sarees'
+  if (combined.includes('salwar') || combined.includes('anarkali') || combined.includes('suit') || combined.includes('set')) return 'Salwar Suits'
+  if (combined.includes('kurti') || combined.includes('kurta') || combined.includes('tunic') || combined.includes('dress') || combined.includes('top')) return 'Kurtis'
+  if (collection && !['everyday ease', 'everyday', 'summer edit', 'occasion'].includes(collection.toLowerCase().trim())) {
+    return collection.trim()
+  }
+  return 'Kurtis'
+}
 const secret = () => process.env.ADMIN_SESSION_SECRET || process.env.ADMIN_PASSWORD
 const sign = (value) => crypto.createHmac('sha256', secret()).update(value).digest('base64url')
 const sessionCookie = (request) => request.headers.get('cookie')?.split(';').map((item) => item.trim()).find((item) => item.startsWith('boutique_session='))?.split('=')[1]
@@ -470,11 +483,21 @@ Carefully examine and compare all photos to organize our store inventory accordi
    - If dresses have DIFFERENT prints, DIFFERENT cuts, DIFFERENT necklines, or DIFFERENT fabrics:
    - Strictly output as SEPARATE products! NEVER combine different dress styles.
 
+4. MANDATORY GARMENT CATEGORY:
+   - "collection" MUST strictly classify the exact clothing type:
+     * "Kurtis" -> Kurtis, tunics, tops, long shirts, kurtas
+     * "Palazzo" -> Palazzo pants, culottes, wide-leg trousers
+     * "Leggings" -> Leggings, churidars, tight bottom-wear
+     * "Dupatta" -> Dupattas, stoles, shawls, scarves
+     * "Sarees" -> Sarees, traditional drapes
+     * "Salwar Suits" -> Full suits, anarkali sets, kurti-pant-dupatta sets
+   - NEVER use generic mood labels like 'Everyday Ease' or 'Summer Edit'.
+
 Return ONLY a valid JSON array of products:
 [
   {
     "name": "Attractive Product Title (e.g. Zari Embroidered Chanderi Kurti)",
-    "collection": "Category (Choose ONLY one: Kurtis, Leggings, Dupatta, Sarees, Occasion, Everyday Ease)",
+    "collection": "Specific Category (Choose STRICTLY: Kurtis, Palazzo, Leggings, Dupatta, Sarees, or Salwar Suits)",
     "description": "2-3 attractive sentences describing the fabric, neckline, sleeves, embroidery, and styling tips.",
     "colours": ["Color 1"],
     "colorVariants": [],
@@ -566,7 +589,7 @@ Return ONLY a valid JSON array of products:
 
           return {
             name: p.name || 'Boutique Dress',
-            collection: p.collection || 'Kurtis',
+            collection: normalizeCategory(p.collection, p.name, p.description),
             description: p.description || '',
             colours: Array.isArray(p.colours) ? p.colours : (p.colours ? [p.colours] : []),
             colorVariants: finalVariants,
@@ -606,10 +629,10 @@ Return ONLY a valid JSON array of products:
           const prompt = `You are a fashion cataloguer for "PAPA'S BOUTIQUE". Inspect this photo and return ONLY a raw JSON object with:
 {
   "name": "Attractive Product Title (e.g. Zari Embroidered Silk Kurti)",
-  "collection": "Category (Choose ONLY one: Kurtis, Leggings, Dupatta, Sarees, Occasion, Everyday Ease)",
+  "collection": "Category (Classify STRICTLY by garment type: Kurtis, Palazzo, Leggings, Dupatta, Sarees, or Salwar Suits. NEVER use Everyday Ease or Summer Edit)",
   "description": "2-3 attractive sentences describing the fabric, neckline, sleeves, embroidery, and styling tips.",
   "primaryColor": "Exact Color Name (e.g. Navy Blue, Maroon, Mustard Yellow, Jet Black, Emerald Green)",
-  "garmentCut": "Classification (e.g. Straight Kurti, Anarkali, A-line Kurti, Leggings, Silk Dupatta)",
+  "garmentCut": "Classification (e.g. Straight Kurti, Anarkali, A-line Kurti, Palazzo Pants, Leggings, Silk Dupatta, Saree)",
   "patternDesign": "Pattern Style (e.g. Floral Embroidery, Solid Plain, Zari Booti, Bandhani, Geometric)",
   "fabric": "Fabric type (e.g. Rayon, Silk, Cotton, Georgette, Chanderi)"
 }`
@@ -704,7 +727,7 @@ Return ONLY a valid JSON array of products:
           const d = sig.data || {}
           const cut = (d.garmentCut || 'Kurti').toLowerCase().trim()
           const pattern = (d.patternDesign || d.name || '').toLowerCase().trim()
-          const collection = d.collection || 'Kurtis'
+          const collection = normalizeCategory(d.collection, d.name, d.description)
           const groupKey = `${collection}::${cut}::${pattern}`
 
           if (!groupedMap.has(groupKey)) {
@@ -803,7 +826,7 @@ Return ONLY a valid JSON array of products:
 Inspect this dress/clothing photo carefully and return ONLY a valid raw JSON object (strictly NO markdown fences, no conversational text) with these exact keys:
 {
   "name": "Attractive Product Title (e.g. Zari Embroidered Silk Kurti)",
-  "collection": "Category (Choose ONLY one from: Kurtis, Leggings, Dupatta, Sarees, Occasion, Everyday Ease)",
+  "collection": "Category (Classify STRICTLY by garment type: Kurtis, Palazzo, Leggings, Dupatta, Sarees, or Salwar Suits. NEVER use Everyday Ease or Summer Edit)",
   "description": "2-3 attractive sentences describing the fabric, neckline, sleeves, embroidery, and styling tips.",
   "colours": ["Primary Color Name"]
 }`
@@ -855,7 +878,13 @@ Inspect this dress/clothing photo carefully and return ONLY a valid raw JSON obj
         else throw new Error('Could not parse AI response into JSON')
       }
 
-      return json({ success: true, product: parsedProduct })
+      return json({
+        success: true,
+        product: {
+          ...parsedProduct,
+          collection: normalizeCategory(parsedProduct.collection, parsedProduct.name, parsedProduct.description)
+        }
+      })
     } catch (err) {
       return json({ error: 'AI analysis failed: ' + (err.message || String(err)) }, 500)
     }

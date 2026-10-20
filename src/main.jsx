@@ -8,6 +8,7 @@ import {
   useNavigate,
   useLocation,
   useParams,
+  useSearchParams,
 } from "react-router-dom";
 import JSZip from "jszip";
 import "./styles.css";
@@ -71,20 +72,24 @@ function findMatchingImageFile(targetName, imageFilesMap) {
 
 const heroImages = [
   {
+    url: "/hero-tamil-girl-1.png",
+    title: "Handcrafted Kurtis & Ethnic Wear",
+    subtitle: "Authentic boutique collection designed with timeless elegance and delicate embroidery.",
+  },
+  {
     url: "https://images.unsplash.com/photo-1610030469983-98e550d6193c?auto=format&fit=crop&w=1800&q=85",
-    title: "Kurtis & Ethnic Suits",
+    title: "Festive Silk & Designer Dupattas",
+    subtitle: "Graceful South Indian ethnic wear crafted for festive charm and celebration.",
   },
   {
     url: "https://images.unsplash.com/photo-1617627143750-d86bc21e42bb?auto=format&fit=crop&w=1800&q=85",
-    title: "Dupattas & Leggings",
+    title: "Palazzo Sets & Daily Elegance",
+    subtitle: "Breathable silhouettes, gentle craftsmanship, and timeless Southern poise.",
   },
   {
     url: "https://images.unsplash.com/photo-1583391733956-3750e0ff4e8b?auto=format&fit=crop&w=1800&q=85",
-    title: "Designer Boutique Collection",
-  },
-  {
-    url: "https://images.unsplash.com/photo-1609357605129-26f69add5d6e?auto=format&fit=crop&w=1800&q=85",
-    title: "Indian Traditional Fashion",
+    title: "Exclusive Boutique Collection",
+    subtitle: "Premium fabrics tailored with care for the moments that matter most.",
   },
 ];
 
@@ -168,8 +173,28 @@ const api = async (path, options = {}) => {
   }
   return response.json();
 };
-const whatsappOrderUrl = (product) => {
-  const message = `Hello PAPA'S BOUTIQUE, I would like to order this dress:\n\n*${product.name}*\nCollection: ${product.collection}\nPrice: ${money(product.price)}\nProduct: ${window.location.href}`;
+const whatsappOrderUrl = (product, selectedSize = "", selectedColor = "", customPrice = null, customUrl = "") => {
+  if (!product) return "";
+  const priceToUse = customPrice !== null && customPrice !== undefined && Number(customPrice) > 0 ? customPrice : (product.fixedPrice || product.price);
+  const linkToUse = customUrl || (typeof window !== "undefined" ? window.location.href : "");
+
+  let lines = [
+    `Hello PAPA'S BOUTIQUE, I would like to order this dress:`,
+    ``,
+    `👗 *${product.name}*`,
+    `🏷️ *Category:* ${product.collection || "Boutique"}`,
+    `💰 *Price:* ${money(priceToUse)}`
+  ];
+  if (selectedSize) {
+    lines.push(`📏 *Selected Size:* ${selectedSize}`);
+  }
+  if (selectedColor) {
+    lines.push(`🎨 *Selected Color:* ${selectedColor}`);
+  }
+  lines.push(``);
+  lines.push(`🔗 *Product Link:*\n${linkToUse}`);
+
+  const message = lines.join("\n");
   return `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`;
 };
 
@@ -223,7 +248,7 @@ function HeroCarousel() {
           key={img.url}
           className={`hero-slide ${index === currentIndex ? "active" : ""}`}
           style={{
-            backgroundImage: `linear-gradient(90deg, rgba(35, 25, 15, 0.6), rgba(35, 25, 15, 0.2)), url('${img.url}')`,
+            backgroundImage: `linear-gradient(90deg, rgba(28, 18, 12, 0.75) 0%, rgba(28, 18, 12, 0.35) 55%, rgba(28, 18, 12, 0.12) 100%), url('${img.url}')`,
           }}
         />
       ))}
@@ -235,14 +260,14 @@ function HeroCarousel() {
             className="hero-logo-img"
           />
         </Link>
-        <p className="eyebrow">The new summer edit</p>
+        <p className="eyebrow">{heroImages[currentIndex]?.title || "South Indian Boutique Collection"}</p>
         <h1>
           PAPA'S
           <br />
           BOUTIQUE
         </h1>
         <p className="lede">
-          Thoughtfully chosen Kurtis, Dupattas, Leggings &amp; silhouettes for beautiful moments.
+          {heroImages[currentIndex]?.subtitle || "Thoughtfully curated Kurtis, Palazzo, Dupattas, Leggings & Sarees for beautiful moments."}
         </p>
         <button
           type="button"
@@ -383,10 +408,14 @@ function ImageLightbox({ images, currentIndex, onClose, onSelectIndex }) {
 
 function ProductDetail() {
   const { slug } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [product, setProduct] = useState(null);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
+
+  const [selectedSize, setSelectedSize] = useState("");
+  const [selectedColor, setSelectedColor] = useState("");
 
   useEffect(() => {
     api(`products/${slug}`)
@@ -399,12 +428,105 @@ function ProductDetail() {
       );
   }, [slug]);
 
+  const imagesList = product?.images?.length
+    ? product.images
+    : product?.image
+    ? [product.image]
+    : [];
+
+  const activeImage = imagesList[activeImageIndex] || imagesList[0] || product?.image;
+
+  const totalStock = Object.values(product?.stock || {}).reduce(
+    (total, qty) => total + Number(qty),
+    0,
+  );
+
+  // Extract colours list
+  const coloursList = React.useMemo(() => {
+    if (!product) return [];
+    if (Array.isArray(product.colorVariants) && product.colorVariants.length > 0) {
+      return product.colorVariants.map((v) => v.colour).filter(Boolean);
+    }
+    if (Array.isArray(product.colours)) return product.colours.filter(Boolean);
+    if (typeof product.colours === "string") {
+      return product.colours.split(",").map((c) => c.trim()).filter(Boolean);
+    }
+    return [];
+  }, [product]);
+
+  // Synchronize size & color from URL query params or defaults
+  useEffect(() => {
+    if (!product) return;
+    const urlSize = searchParams.get("size");
+    const urlColor = searchParams.get("color");
+
+    const defaultSize = urlSize && product.sizes?.includes(urlSize) ? urlSize : (product.sizes?.[0] || "");
+    const defaultColor = urlColor || (coloursList[0] || "");
+
+    setSelectedSize(defaultSize);
+    setSelectedColor(defaultColor);
+
+    if (defaultColor && Array.isArray(product.colorVariants)) {
+      const v = product.colorVariants.find(
+        (item) => item.colour?.toLowerCase() === defaultColor.toLowerCase()
+      );
+      if (v && v.image) {
+        const idx = imagesList.findIndex((img) => img === v.image);
+        if (idx >= 0) setActiveImageIndex(idx);
+      }
+    }
+  }, [product, searchParams, coloursList]);
+
+  const handleSelectSize = (size) => {
+    setSelectedSize(size);
+    const next = new URLSearchParams(searchParams);
+    next.set("size", size);
+    if (selectedColor) next.set("color", selectedColor);
+    setSearchParams(next, { replace: true });
+  };
+
+  const handleSelectColor = (colour) => {
+    setSelectedColor(colour);
+    const next = new URLSearchParams(searchParams);
+    if (selectedSize) next.set("size", selectedSize);
+    next.set("color", colour);
+    setSearchParams(next, { replace: true });
+
+    // Switch image if this color variant has its own image
+    if (Array.isArray(product?.colorVariants)) {
+      const v = product.colorVariants.find(
+        (item) => item.colour?.toLowerCase() === colour.toLowerCase()
+      );
+      if (v && v.image) {
+        const idx = imagesList.findIndex((img) => img === v.image);
+        if (idx >= 0) setActiveImageIndex(idx);
+      }
+    }
+  };
+
+  const currentPrice = (() => {
+    if (!product) return 0;
+    if (selectedColor && Array.isArray(product.colorVariants)) {
+      const v = product.colorVariants.find(
+        (item) => item.colour?.toLowerCase() === selectedColor.toLowerCase()
+      );
+      if (v && (Number(v.fixedPrice) > 0 || Number(v.price) > 0)) {
+        return Number(v.fixedPrice || v.price);
+      }
+    }
+    return Number(product.fixedPrice || product.price || 0);
+  })();
+
+  const currentProductUrl = typeof window !== "undefined"
+    ? `${window.location.origin}/product/${product?.slug || slug}?size=${encodeURIComponent(selectedSize || "")}&color=${encodeURIComponent(selectedColor || "")}`
+    : "";
+
   const handleShare = async () => {
     if (!product) return;
     const shareData = {
       title: `${product.name} | PAPA'S BOUTIQUE`,
-      text: `Take a look at "${product.name}" (${product.collection}) for ${money(product.price)} at PAPA'S BOUTIQUE!`,
-      url: window.location.href,
+      text: `Take a look at "${product.name}" (${product.collection}${selectedSize ? ", Size: " + selectedSize : ""}${selectedColor ? ", Color: " + selectedColor : ""}) for ${money(currentPrice)} at PAPA'S BOUTIQUE!`,
+      url: currentProductUrl || window.location.href,
     };
 
     if (navigator.share && navigator.canShare && navigator.canShare(shareData)) {
@@ -417,28 +539,15 @@ function ProductDetail() {
     }
 
     try {
-      await navigator.clipboard.writeText(window.location.href);
+      await navigator.clipboard.writeText(currentProductUrl || window.location.href);
       setShareCopied(true);
       setTimeout(() => setShareCopied(false), 2500);
     } catch {
-      alert("Product link: " + window.location.href);
+      alert("Product link: " + (currentProductUrl || window.location.href));
     }
   };
 
   if (!product) return <main className="notice">Loading dress details…</main>;
-
-  const imagesList = product.images?.length
-    ? product.images
-    : product.image
-    ? [product.image]
-    : [];
-
-  const activeImage = imagesList[activeImageIndex] || imagesList[0] || product.image;
-
-  const totalStock = Object.values(product.stock || {}).reduce(
-    (total, qty) => total + Number(qty),
-    0,
-  );
 
   return (
     <main className="product">
@@ -479,29 +588,74 @@ function ProductDetail() {
         </Link>
         <p className="eyebrow">{product.collection}</p>
         <h1>{product.name}</h1>
-        <h2>{money(product.price)}</h2>
+        <h2>{money(currentPrice)}</h2>
         <p className="description">{product.description}</p>
-        <div className="detail">
-          <span>Available sizes</span>
-          <div>
-            {product.sizes.map((size) => (
-              <b key={size}>{size}</b>
-            ))}
+
+        {/* Interactive Size Selector */}
+        {product.sizes && product.sizes.length > 0 && (
+          <div className="product-selector-block">
+            <div className="selector-title-row">
+              <span className="selector-title">Available Sizes</span>
+              <span className="selector-chosen-tag">Selected: <b>{selectedSize || "None"}</b></span>
+            </div>
+            <div className="size-pill-row">
+              {product.sizes.map((size) => (
+                <button
+                  key={size}
+                  type="button"
+                  className={`size-pill-btn ${selectedSize === size ? "selected" : ""}`}
+                  onClick={() => handleSelectSize(size)}
+                  title={`Select size ${size}`}
+                >
+                  {size}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
-        <div className="detail">
-          <span>Colours</span>
-          <p>{product.colours.join(" · ")}</p>
-        </div>
+        )}
+
+        {/* Interactive Colour Selector */}
+        {coloursList.length > 0 && (
+          <div className="product-selector-block">
+            <div className="selector-title-row">
+              <span className="selector-title">Available Colours</span>
+              <span className="selector-chosen-tag">Selected: <b>{selectedColor || "None"}</b></span>
+            </div>
+            <div className="color-pill-row">
+              {coloursList.map((col) => {
+                const variantMatch = Array.isArray(product.colorVariants)
+                  ? product.colorVariants.find((v) => v.colour?.toLowerCase() === col.toLowerCase())
+                  : null;
+                const vThumb = variantMatch?.image || "";
+                return (
+                  <button
+                    key={col}
+                    type="button"
+                    className={`color-pill-btn ${selectedColor === col ? "selected" : ""}`}
+                    onClick={() => handleSelectColor(col)}
+                    title={`Select colour ${col}`}
+                  >
+                    {vThumb && (
+                      <img src={vThumb} alt={col} className="color-pill-mini-thumb" />
+                    )}
+                    <span>{col}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <p className={totalStock ? "in-stock" : "sold-out"}>
           {totalStock
             ? `${totalStock} pieces currently in stock`
             : "Currently sold out"}
         </p>
+
         <div className="product-action-row">
           <a
             className="button whatsapp"
-            href={whatsappOrderUrl(product)}
+            href={whatsappOrderUrl(product, selectedSize, selectedColor, currentPrice, currentProductUrl)}
             target="_blank"
             rel="noreferrer"
           >
@@ -1171,7 +1325,7 @@ REQUIRED JSON FORMAT:
 [
   {
     "name": "Attractive Product Title (e.g. Zari Embroidered Chanderi Kurti)",
-    "collection": "Category (Choose from: Kurtis, Leggings, Dupatta, Sarees, Occasion, Everyday Ease)",
+    "collection": "Category (Strictly choose garment category from: Kurtis, Palazzo, Leggings, Dupatta, Sarees, Salwar Suits, Occasion. NEVER use generic mood names like Everyday Ease or Summer Edit)",
     "description": "2-3 attractive sentences describing the fabric, style, embroidery/work, fit, and styling tips.",
     "colours": ["Primary Color", "Secondary Color"],
     "colorVariants": [
@@ -3451,7 +3605,7 @@ function Admin() {
             />
             <div className="category-presets">
               <span className="preset-label">Quick select:</span>
-              {["Kurtis", "Leggings", "Dupatta", "Sarees", "Summer Edit", "Occasion", "Everyday Ease"].map(
+              {["Kurtis", "Palazzo", "Leggings", "Dupatta", "Sarees", "Salwar Suits", "Occasion"].map(
                 (cat) => (
                   <button
                     key={cat}
